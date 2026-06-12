@@ -151,7 +151,7 @@
         // アクセストークンの設定
         //Web配信用
         Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
-        
+
         // ビューアーの初期化
         const viewer = new Cesium.Viewer("cesiumContainer", { 
             shadows: true, // シャドウを有効にする
@@ -288,17 +288,93 @@
                 window.propertyMappingJa = propertyMappingJa;
                 window.propertyMappingEn = propertyMappingEn;
                 window.propertyOrder = propertyOrder;
+                window.statusOptions = ['Accepted', 'Rejected', 'Reviewed'];
 
                 // グローバル変数にマップを保存
                 window.entityByFdId = entityByFdId;
                 window.currentEntity = null;
                 window.dataSource = dataSource;
+
+                function getPropertyValue(property) {
+                    if (property && typeof property.getValue === 'function') {
+                        return property.getValue(Cesium.JulianDate.now());
+                    }
+                    return property;
+                }
+
+                function getFormattedPropertyValue(value) {
+                    if (value === undefined || value === null) {
+                        return '';
+                    }
+
+                    if (typeof value === 'number') {
+                        return Math.round(value * 1000) / 1000;
+                    }
+
+                    if (typeof value === 'string' && value !== '' && !isNaN(value)) {
+                        return Math.round(parseFloat(value) * 1000) / 1000;
+                    }
+
+                    return value;
+                }
+
+                function buildStatusSelect(currentValue) {
+                    const normalizedCurrent = (currentValue || '').toString().toLowerCase();
+                    const optionsHtml = window.statusOptions.map(option => {
+                        const isSelected = option.toLowerCase() === normalizedCurrent ? ' selected' : '';
+                        return `<option value="${option}"${isSelected}>${option}</option>`;
+                    }).join('');
+
+                    return `<select id="statusSelect" onchange="updateCurrentEntityStatus(this.value)" style="width: 100%; padding: 4px;">${optionsHtml}</select>`;
+                }
+
+                function renderEntityInfo(entity) {
+                    const entityInfo = document.getElementById('entityInfo');
+                    let infoHtml = '';
+
+                    if (entity && entity.properties) {
+                        const propertyMapping = window.currentLanguage === 'ja' ? window.propertyMappingJa : window.propertyMappingEn;
+                        infoHtml += '<table style="width: 100%; border-collapse: collapse;">';
+
+                        window.propertyOrder.forEach(key => {
+                            if (entity.properties[key] !== undefined) {
+                                const rawValue = getPropertyValue(entity.properties[key]);
+                                const value = getFormattedPropertyValue(rawValue);
+                                const displayName = propertyMapping[key] || key;
+                                const valueHtml = key === '_AIM_VSTATUS' ? buildStatusSelect(value) : value;
+
+                                infoHtml += `
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; width: 40%;">${displayName}</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">${valueHtml}</td>
+                                    </tr>
+                                `;
+                            }
+                        });
+
+                        infoHtml += '</table>';
+                    }
+
+                    entityInfo.innerHTML = infoHtml;
+                }
+
+                window.updateCurrentEntityStatus = function(newStatus) {
+                    if (!window.currentEntity || !window.currentEntity.properties) {
+                        return;
+                    }
+
+                    const statusProperty = window.currentEntity.properties._AIM_VSTATUS;
+                    if (statusProperty && typeof statusProperty.setValue === 'function') {
+                        statusProperty.setValue(newStatus);
+                    } else {
+                        window.currentEntity.properties._AIM_VSTATUS = newStatus;
+                    }
+                };
                 
                 // エンティティ選択時のイベントリスナー
                 viewer.selectedEntityChanged.addEventListener(function(entity) {
                     const panel = document.getElementById('controlPanel');
                     const panelHeader = document.getElementById('panelHeader');
-                    const entityInfo = document.getElementById('entityInfo');
                     
                     if (Cesium.defined(entity)) {
                         // 現在のカメラの角度を取得
@@ -321,24 +397,7 @@
                         }
                         
                         // 属性情報を表示
-                        let infoHtml = '';
-                        if (entity.properties) {
-                            const propertyMapping = window.currentLanguage === 'ja' ? window.propertyMappingJa : window.propertyMappingEn;
-                            window.propertyOrder.forEach(key => {
-                                if (entity.properties[key] !== undefined) {
-                                    let value = entity.properties[key];
-                                    const displayName = propertyMapping[key] || key;
-                                    
-                                    // 数値の場合は小数点以下3桁に四捨五入
-                                    if (!isNaN(value) && value !== '') {
-                                        value = Math.round(parseFloat(value) * 1000) / 1000;
-                                    }
-                                    
-                                    infoHtml += `<p><strong>${displayName}:</strong> ${value}</p>`;
-                                }
-                            });
-                        }
-                        entityInfo.innerHTML = infoHtml;
+                        renderEntityInfo(entity);
                     } else {
                         // パネルを非表示
                         panel.style.display = 'none';
@@ -423,25 +482,7 @@
                     
                     // 現在のエンティティの情報を再表示
                     if (window.currentEntity) {
-                        const entityInfo = document.getElementById('entityInfo');
-                        let infoHtml = '';
-                        if (window.currentEntity.properties) {
-                            const propertyMapping = lang === 'ja' ? window.propertyMappingJa : window.propertyMappingEn;
-                            window.propertyOrder.forEach(key => {
-                                if (window.currentEntity.properties[key] !== undefined) {
-                                    let value = window.currentEntity.properties[key];
-                                    const displayName = propertyMapping[key] || key;
-                                    
-                                    // 数値の場合は小数点以下3桁に四捨五入
-                                    if (!isNaN(value) && value !== '') {
-                                        value = Math.round(parseFloat(value) * 1000) / 1000;
-                                    }
-                                    
-                                    infoHtml += `<p><strong>${displayName}:</strong> ${value}</p>`;
-                                }
-                            });
-                        }
-                        entityInfo.innerHTML = infoHtml;
+                        renderEntityInfo(window.currentEntity);
                     }
                 };
 
