@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <!-- CesiumJS の CSS と JS を読み込む -->
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+    <style>
+        html, body, #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #controlPanel {
+            position: absolute;
+            top: 50px;
+            left: 50px;
+            background-color: rgba(255, 255, 255, 0.95);
+            padding: 0;
+            border-radius: 5px;
+            box-shadow: 0 0 12px rgba(0, 0, 0, 0.3);
+            display: none;
+            z-index: 100;
+            max-width: 300px;
+            max-height: 600px;
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+        }
+        #panelHeader {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 15px;
+            border-radius: 5px 5px 0 0;
+            cursor: move;
+            font-weight: bold;
+            user-select: none;
+        }
+        #panelContent {
+            padding: 15px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        #entityInfo {
+            max-height: 420px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            padding-right: 5px;
+            flex: 1;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+        }
+        #entityInfo p {
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            cursor: text;
+            margin: 5px 0;
+            padding: 3px;
+            border-radius: 3px;
+        }
+        #entityInfo p:hover {
+            background-color: rgba(76, 175, 80, 0.1);
+        }
+        #entityInfo::-webkit-scrollbar {
+            width: 8px;
+        }
+        #entityInfo::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+        #entityInfo::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 3px;
+        }
+        #entityInfo::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        #controlPanel h3 {
+            margin: 0;
+            font-size: 14px;
+            display: none;
+        }
+        #buttonContainer {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-shrink: 0;
+        }
+        #languageContainer {
+            display: flex;
+            gap: 5px;
+            margin-top: 10px;
+            flex-shrink: 0;
+        }
+        #languageContainer button {
+            flex: 1;
+            padding: 8px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        #languageContainer button:hover {
+            background-color: #1976D2;
+        }
+        #languageContainer button.active {
+            background-color: #ff9800;
+        }
+        #controlPanel button {
+            flex: 1;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #controlPanel button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    <div id="controlPanel">
+        <div id="panelHeader">選択中のエンティティ</div>
+        <div id="panelContent">
+            <div id="languageContainer">
+                <button id="langJa" class="active" onclick="switchLanguage('ja')">日本語</button>
+                <button id="langEn" onclick="switchLanguage('en')">English</button>
+            </div>
+            <div id="entityInfo"></div>
+            <div id="buttonContainer">
+                <button id="prevButton" onclick="goToPreviousEntity()">前へ</button>
+                <button id="nextButton" onclick="goToNextEntity()">次へ</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        // アクセストークンの設定
+        Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2M2IwYjBmOC05ZmMxLTRkY2QtODE1My1mMWRjODQyNjQwYmIiLCJpZCI6MjUyOTUyLCJpYXQiOjE3MzA3OTE3Nzd9.JeLoUrsRKHKT17PPrUj4Fth696fDNL80dyK4DvBZ6CE";
+
+        // ビューアーの初期化
+        const viewer = new Cesium.Viewer("cesiumContainer", { 
+            shadows: true, // シャドウを有効にする
+            requestRenderMode: true, // レンダリングを必要なときにのみ行う
+            maximumRenderFrameRate: 60 // 最大フレームレートを設定
+        });
+
+        async function initCesium() {
+            try {
+                // Cesium World Terrainを設定
+                viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
+                    requestVertexNormals: true
+                });
+                // Google Photorealistic 3D Tiles を読み込む（クリッピングが機能しないため無効）
+                // const tileset = await Cesium.createGooglePhotorealistic3DTileset();
+                // viewer.scene.primitives.add(tileset);
+                // tileset.maximumMemoryUsage = 1024; // メモリ使用量の上限を設定 (MB)
+                
+                // 1. 点群 (3D Tileset) の読み込み
+                const pointCloud = await Cesium.Cesium3DTileset.fromIonAssetId(4886764,{
+                    maximumMemoryUsage: 512, // メモリ使用量の上限を設定 (MB)
+                });
+                viewer.scene.primitives.add(pointCloud);
+                await viewer.zoomTo(pointCloud);
+                pointCloud.style = new Cesium.Cesium3DTileStyle({ pointSize: '5.0' });
+
+                // 2. GeoJSON の読み込み
+                const resource = await Cesium.IonResource.fromAssetId(4886763);
+                // await viewer.zoomTo(resource);
+
+                const dataSource = await Cesium.GeoJsonDataSource.load(resource, {
+                    stroke: Cesium.Color.YELLOW,
+                    fill: Cesium.Color.YELLOW.withAlpha(0.4),
+                    clampToGround: true
+                });
+                await viewer.dataSources.add(dataSource);
+
+                // GeoJSONエンティティにボタンを追加
+                const entities = dataSource.entities.values;
+                const entityByFdId = {}; // _FD_IDをキーとしたエンティティマップ
+                
+                for (let i = 0; i < entities.length; i++) {
+                    const entity = entities[i];
+                    const entityId = entity.id || `entity_${i}`;
+                    
+                    // _FD_IDを取得してマップに追加
+                    if (entity.properties && entity.properties._FD_ID !== undefined) {
+                        const fdId = entity.properties._FD_ID;
+                        entityByFdId[fdId] = entity;
+                        entity._storeFdId = fdId; // エンティティに_FD_IDを保存
+                    }
+                    
+                    // 既存の属性情報をテーブルとして構築
+                    let propertiesHtml = '';
+                    if (entity.properties) {
+                        propertiesHtml = '<table style="width: 100%; border-collapse: collapse;">';
+                        for (const key in entity.properties) {
+                            const value = entity.properties[key];
+                            propertiesHtml += `
+                                <tr>
+                                    <td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; width: 40%;">${key}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">${value}</td>
+                                </tr>
+                            `;
+                        }
+                        propertiesHtml += '</table>';
+                    }
+                    
+                    // InfoBoxを表示しない（空に設定）
+                    entity.description = '';
+                    // 属性情報をエンティティに保存（パネルで表示用）
+                    entity._properties = entity.properties;
+                }
+
+                // ドラッグ可能な機能を追加
+                let isDragging = false;
+                let offsetX = 0;
+                let offsetY = 0;
+                const panel = document.getElementById('controlPanel');
+                const panelHeader = document.getElementById('panelHeader');
+
+                panelHeader.addEventListener('mousedown', function(e) {
+                    isDragging = true;
+                    const rect = panel.getBoundingClientRect();
+                    offsetX = e.clientX - rect.left;
+                    offsetY = e.clientY - rect.top;
+                });
+
+                document.addEventListener('mousemove', function(e) {
+                    if (isDragging) {
+                        panel.style.left = (e.clientX - offsetX) + 'px';
+                        panel.style.top = (e.clientY - offsetY) + 'px';
+                        panel.style.right = 'auto'; // rightを削除してleftを優先させる
+                    }
+                });
+
+                document.addEventListener('mouseup', function() {
+                    isDragging = false;
+                });
+
+                // Propertyマッピング定義
+                const propertyMappingJa = {
+                    '_FD_ID': 'ID',
+                    '_FD_TreeCrow': '樹冠(m)',
+                    '_FD_TreeTru1': '主幹(m)',
+                    '_FD_TreeTrun': '副幹(m)',
+                    '_FD_Inclinat': '傾き(°)',
+                    '_FD_ZRange': '樹高(m)',
+                    '_Jukei': '樹形',
+                    '_Jusei': '樹勢',
+                    '_AIM_LTIME': '処理した時間',
+                    '_AIM_LUSER': '確認者',
+                    '_AIM_VSTATUS': 'ステータス'
+                };
+
+                const propertyMappingEn = {
+                    '_FD_ID': 'ID',
+                    '_FD_TreeCrow': 'TreeCrow(m)',
+                    '_FD_TreeTru1': 'TreeTru1(m)',
+                    '_FD_TreeTrun': 'TreeTrun(m)',
+                    '_FD_Inclinat': 'Inclinat(-)',
+                    '_FD_ZRange': 'ZRange(m)',
+                    '_Jukei': 'Jukei',
+                    '_Jusei': 'Jusei',
+                    '_AIM_LTIME': 'Analysis Date',
+                    '_AIM_LUSER': 'User',
+                    '_AIM_VSTATUS': 'Status'
+                };
+
+                const propertyOrder = ['_FD_ID', '_FD_TreeCrow', '_FD_TreeTru1', '_FD_TreeTrun', '_FD_Inclinat', '_FD_ZRange', '_Jukei', '_Jusei', '_AIM_LTIME', '_AIM_LUSER', '_AIM_VSTATUS'];
+                
+                // 言語設定（グローバル変数）
+                window.currentLanguage = 'ja';
+                window.propertyMappingJa = propertyMappingJa;
+                window.propertyMappingEn = propertyMappingEn;
+                window.propertyOrder = propertyOrder;
+
+                // グローバル変数にマップを保存
+                window.entityByFdId = entityByFdId;
+                window.currentEntity = null;
+                window.dataSource = dataSource;
+                
+                // エンティティ選択時のイベントリスナー
+                viewer.selectedEntityChanged.addEventListener(function(entity) {
+                    const panel = document.getElementById('controlPanel');
+                    const panelHeader = document.getElementById('panelHeader');
+                    const entityInfo = document.getElementById('entityInfo');
+                    
+                    if (Cesium.defined(entity)) {
+                        // 現在のカメラの角度を取得
+                        const heading = viewer.camera.heading;
+                        const pitch = viewer.camera.pitch;
+                        
+                        // 選択したエンティティに角度を維持したままズーム（rangeを小さくしてもっと近くズーム）
+                        const range = 25; // ズーム距離（小さいほど近い）
+                        viewer.zoomTo(entity, new Cesium.HeadingPitchRange(heading, pitch, range));
+                        
+                        // パネルを表示
+                        panel.style.display = 'block';
+                        window.currentEntity = entity;
+                        
+                        // ヘッダーに_FD_IDを表示
+                        if (entity._storeFdId !== undefined) {
+                            panelHeader.textContent = `選択中のエンティティ：${entity._storeFdId}`;
+                        } else {
+                            panelHeader.textContent = '選択中のエンティティ';
+                        }
+                        
+                        // 属性情報を表示
+                        let infoHtml = '';
+                        if (entity.properties) {
+                            const propertyMapping = window.currentLanguage === 'ja' ? window.propertyMappingJa : window.propertyMappingEn;
+                            window.propertyOrder.forEach(key => {
+                                if (entity.properties[key] !== undefined) {
+                                    let value = entity.properties[key];
+                                    const displayName = propertyMapping[key] || key;
+                                    
+                                    // 数値の場合は小数点以下3桁に四捨五入
+                                    if (!isNaN(value) && value !== '') {
+                                        value = Math.round(parseFloat(value) * 1000) / 1000;
+                                    }
+                                    
+                                    infoHtml += `<p><strong>${displayName}:</strong> ${value}</p>`;
+                                }
+                            });
+                        }
+                        entityInfo.innerHTML = infoHtml;
+                    } else {
+                        // パネルを非表示
+                        panel.style.display = 'none';
+                        window.currentEntity = null;
+                    }
+                });
+                
+                // 次へボタンクリック時の処理
+                window.goToNextEntity = function() {
+                    if (!window.currentEntity || window.currentEntity._storeFdId === undefined) {
+                        alert('エンティティが選択されていません');
+                        return;
+                    }
+                    
+                    const currentFdId = window.currentEntity._storeFdId;
+                    const nextFdId = currentFdId + 1;
+                    
+                    const nextEntity = window.entityByFdId[nextFdId];
+                    if (nextEntity) {
+                        viewer.selectedEntity = nextEntity;
+                    } else {
+                        alert('_FD_ID: ' + nextFdId + ' が見つかりません。次のエンティティはありません。');
+                    }
+                };
+
+                // 前へボタンクリック時の処理
+                window.goToPreviousEntity = function() {
+                    if (!window.currentEntity || window.currentEntity._storeFdId === undefined) {
+                        alert('エンティティが選択されていません');
+                        return;
+                    }
+                    
+                    const currentFdId = window.currentEntity._storeFdId;
+                    const prevFdId = currentFdId - 1;
+                    
+                    const prevEntity = window.entityByFdId[prevFdId];
+                    if (prevEntity) {
+                        viewer.selectedEntity = prevEntity;
+                    } else {
+                        alert('_FD_ID: ' + prevFdId + ' が見つかりません。前のエンティティはありません。');
+                    }
+                };
+
+                // 言語切り替え関数
+                window.switchLanguage = function(lang) {
+                    window.currentLanguage = lang;
+                    
+                    // ボタンのアクティブ状態を更新
+                    const langJaBtn = document.getElementById('langJa');
+                    const langEnBtn = document.getElementById('langEn');
+                    
+                    if (lang === 'ja') {
+                        langJaBtn.classList.add('active');
+                        langEnBtn.classList.remove('active');
+                    } else {
+                        langJaBtn.classList.remove('active');
+                        langEnBtn.classList.add('active');
+                    }
+                    
+                    // パネルヘッダーも言語に応じて更新
+                    const panelHeader = document.getElementById('panelHeader');
+                    if (lang === 'ja') {
+                        panelHeader.textContent = window.currentEntity && window.currentEntity._storeFdId !== undefined 
+                            ? `選択中のエンティティ：${window.currentEntity._storeFdId}`
+                            : '選択中のエンティティ';
+                    } else {
+                        panelHeader.textContent = window.currentEntity && window.currentEntity._storeFdId !== undefined 
+                            ? `Selected Entity: ${window.currentEntity._storeFdId}`
+                            : 'Selected Entity';
+                    }
+                    
+                    // 次へ・前へボタンのテキストを更新
+                    const prevBtn = document.getElementById('prevButton');
+                    const nextBtn = document.getElementById('nextButton');
+                    if (lang === 'ja') {
+                        prevBtn.textContent = '前へ';
+                        nextBtn.textContent = '次へ';
+                    } else {
+                        prevBtn.textContent = 'Previous';
+                        nextBtn.textContent = 'Next';
+                    }
+                    
+                    // 現在のエンティティの情報を再表示
+                    if (window.currentEntity) {
+                        const entityInfo = document.getElementById('entityInfo');
+                        let infoHtml = '';
+                        if (window.currentEntity.properties) {
+                            const propertyMapping = lang === 'ja' ? window.propertyMappingJa : window.propertyMappingEn;
+                            window.propertyOrder.forEach(key => {
+                                if (window.currentEntity.properties[key] !== undefined) {
+                                    let value = window.currentEntity.properties[key];
+                                    const displayName = propertyMapping[key] || key;
+                                    
+                                    // 数値の場合は小数点以下3桁に四捨五入
+                                    if (!isNaN(value) && value !== '') {
+                                        value = Math.round(parseFloat(value) * 1000) / 1000;
+                                    }
+                                    
+                                    infoHtml += `<p><strong>${displayName}:</strong> ${value}</p>`;
+                                }
+                            });
+                        }
+                        entityInfo.innerHTML = infoHtml;
+                    }
+                };
+
+            } catch (error) {
+                console.log(error);
+            }
+        }
+
+        initCesium();
+    </script>
+</body>
+</html>
