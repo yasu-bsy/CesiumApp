@@ -149,14 +149,13 @@
     </div>
     <script>
         // アクセストークンの設定
-        //Web配信用
         Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
 
         // ビューアーの初期化
         const viewer = new Cesium.Viewer("cesiumContainer", { 
-            shadows: true, // シャドウを有効にする
+            shadows: false, // シャドウを無効にする
             requestRenderMode: true, // レンダリングを必要なときにのみ行う
-            maximumRenderFrameRate: 60 // 最大フレームレートを設定
+            maximumRenderFrameRate: 30 // 最大フレームレートを設定
         });
 
         async function initCesium() {
