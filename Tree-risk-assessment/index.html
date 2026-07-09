@@ -130,12 +130,91 @@
         #controlPanel button:hover {
             background-color: #45a049;
         }
+
+        /* 画像フローティングパネル */
+        #imageModal {
+            display: none;
+            position: fixed;
+            top: 80px;
+            right: 60px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+            z-index: 1000;
+            flex-direction: column;
+            user-select: none;
+            width: 520px;
+            height: 400px;
+            min-width: 260px;
+            min-height: 180px;
+            resize: both;
+            overflow: hidden;
+        }
+        #imageModal.active {
+            display: flex;
+        }
+        #imageModalHeader {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #333;
+            border-radius: 8px 8px 0 0;
+            padding: 8px 12px;
+            cursor: move;
+            user-select: none;
+        }
+        #imageModalTitle {
+            color: #ddd;
+            font-size: 13px;
+            pointer-events: none;
+        }
+        #imageModalClose {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #555;
+            color: #fff;
+            border: none;
+            font-size: 14px;
+            line-height: 22px;
+            text-align: center;
+            cursor: pointer;
+            flex-shrink: 0;
+            margin-left: 10px;
+        }
+        #imageModalClose:hover {
+            background: #e53935;
+        }
+        #imageModalBody {
+            padding: 8px;
+            flex: 1;
+            overflow: hidden;
+        }
+        #imageModalBody img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border-radius: 4px;
+            object-fit: contain;
+        }
     </style>
 </head>
 <body>
     <div id="cesiumContainer"></div>
+
+    <!-- 画像フローティングパネル -->
+    <div id="imageModal">
+        <div id="imageModalHeader">
+            <div id="imageModalTitle"></div>
+            <div id="imageModalClose" title="閉じる">&#x2715;</div>
+        </div>
+        <div id="imageModalBody">
+            <img id="imageModalImg" src="" alt="snapshot">
+        </div>
+    </div>
+
     <div id="controlPanel">
-        <div id="panelHeader">選択中のエンティティ</div>
+        <div id="panelHeader">選択中のアセット</div>
         <div id="panelContent">
             <div id="languageContainer">
                 <button id="langJa" class="active" onclick="switchLanguage('ja')">日本語</button>
@@ -179,7 +258,8 @@
                 pointCloud.style = new Cesium.Cesium3DTileStyle({ pointSize: '5.0' });
 
                 // 2. GeoJSON の読み込み
-                const resource = await Cesium.IonResource.fromAssetId(4886763);
+                // const resource = await Cesium.IonResource.fromAssetId(4886763);
+                const resource = await Cesium.IonResource.fromAssetId(5039267);
                 // await viewer.zoomTo(resource);
 
                 const dataSource = await Cesium.GeoJsonDataSource.load(resource, {
@@ -199,9 +279,17 @@
                     
                     // _FD_IDを取得してマップに追加
                     if (entity.properties && entity.properties._FD_ID !== undefined) {
-                        const fdId = entity.properties._FD_ID;
-                        entityByFdId[fdId] = entity;
-                        entity._storeFdId = fdId; // エンティティに_FD_IDを保存
+                        const fdIdProperty = entity.properties._FD_ID;
+                        const rawFdId = (fdIdProperty && typeof fdIdProperty.getValue === 'function')
+                            ? fdIdProperty.getValue(Cesium.JulianDate.now())
+                            : fdIdProperty;
+
+                        if (rawFdId !== undefined && rawFdId !== null && rawFdId !== '') {
+                            const numericFdId = Number(rawFdId);
+                            const fdId = Number.isNaN(numericFdId) ? String(rawFdId) : numericFdId;
+                            entityByFdId[fdId] = entity;
+                            entity._storeFdId = fdId; // エンティティに_FD_IDを保存
+                        }
                     }
                     
                     // 既存の属性情報をテーブルとして構築
@@ -262,9 +350,9 @@
                     '_FD_ZRange': '樹高(m)',
                     '_Jukei': '樹形',
                     '_Jusei': '樹勢',
+                    '_RISK_LEVEL': '危険度',
                     '_AIM_LTIME': '処理日時',
-                    '_AIM_LUSER': '確認者',
-                    '_AIM_VSTATUS': 'ステータス'
+                    '_AIM_LUSER': '確認者'
                 };
 
                 const propertyMappingEn = {
@@ -276,19 +364,18 @@
                     '_FD_ZRange': 'Tree Height(m)',
                     '_Jukei': 'Tree Shape',
                     '_Jusei': 'Tree Vigor',
+                    '_RISK_LEVEL': 'Risk Level',
                     '_AIM_LTIME': 'Analysis Date',
-                    '_AIM_LUSER': 'User',
-                    '_AIM_VSTATUS': 'Status'
+                    '_AIM_LUSER': 'User'
                 };
 
-                const propertyOrder = ['_FD_ID', '_FD_TreeCrow', '_FD_TreeTru1', '_FD_TreeTrun', '_FD_Inclinat', '_FD_ZRange', '_Jukei', '_Jusei', '_AIM_LTIME', '_AIM_LUSER', '_AIM_VSTATUS'];
+                const propertyOrder = ['_FD_ID', '_FD_TreeCrow', '_FD_TreeTru1', '_FD_TreeTrun', '_FD_Inclinat', '_FD_ZRange', '_Jukei', '_Jusei', '_RISK_LEVEL'];
                 
                 // 言語設定（グローバル変数）
                 window.currentLanguage = 'ja';
                 window.propertyMappingJa = propertyMappingJa;
                 window.propertyMappingEn = propertyMappingEn;
                 window.propertyOrder = propertyOrder;
-                window.statusOptions = ['Accepted', 'Rejected', 'Reviewed'];
 
                 // グローバル変数にマップを保存
                 window.entityByFdId = entityByFdId;
@@ -318,14 +405,134 @@
                     return value;
                 }
 
-                function buildStatusSelect(currentValue) {
-                    const normalizedCurrent = (currentValue || '').toString().toLowerCase();
-                    const optionsHtml = window.statusOptions.map(option => {
-                        const isSelected = option.toLowerCase() === normalizedCurrent ? ' selected' : '';
-                        return `<option value="${option}"${isSelected}>${option}</option>`;
-                    }).join('');
+                function buildScoreSelect(fieldKey, currentValue) {
+                    const normalized = Number(currentValue);
+                    const selectedValue = Number.isInteger(normalized) && normalized >= 1 && normalized <= 5 ? normalized : null;
+                    const optionsHtml = ['<option value=""></option>', ...[1, 2, 3, 4, 5].map(score => {
+                        const isSelected = selectedValue === score ? ' selected' : '';
+                        return `<option value="${score}"${isSelected}>${score}</option>`;
+                    })];
 
-                    return `<select id="statusSelect" onchange="updateCurrentEntityStatus(this.value)" style="width: 100%; padding: 4px;">${optionsHtml}</select>`;
+                    return `<select onchange="updateCurrentEntityScore('${fieldKey}', this.value)" style="width: 100%; padding: 4px;">${optionsHtml.join('')}</select>`;
+                }
+
+                function getRiskLevelLabel(entity) {
+                    const jukeiRaw = entity && entity.properties ? getPropertyValue(entity.properties._Jukei) : undefined;
+                    const juseiRaw = entity && entity.properties ? getPropertyValue(entity.properties._Jusei) : undefined;
+                    const jukei = Number(jukeiRaw);
+                    const jusei = Number(juseiRaw);
+
+                    const normalizedJukei = Number.isInteger(jukei) && jukei >= 1 && jukei <= 5 ? jukei : null;
+                    const normalizedJusei = Number.isInteger(jusei) && jusei >= 1 && jusei <= 5 ? jusei : null;
+
+                    if (normalizedJukei === null || normalizedJusei === null) {
+                        return '';
+                    }
+
+                    const maxScore = Math.max(normalizedJukei, normalizedJusei);
+                    if (maxScore <= 2) return 'Ⅰ';
+                    if (maxScore === 3) return 'Ⅱ';
+                    if (maxScore === 4) return 'Ⅲ';
+                    if (maxScore === 5) return 'Ⅳ';
+                    return '';
+                }
+
+                function getRiskColor(entity) {
+                    const riskLevel = getRiskLevelLabel(entity);
+                    if (riskLevel === 'Ⅰ') return Cesium.Color.DODGERBLUE;
+                    if (riskLevel === 'Ⅱ') return Cesium.Color.LIMEGREEN;
+                    if (riskLevel === 'Ⅲ') return Cesium.Color.GOLD;
+                    if (riskLevel === 'Ⅳ') return Cesium.Color.RED;
+                    return null;
+                }
+
+                function getEntityCenterPosition(entity) {
+                    if (!entity) {
+                        return null;
+                    }
+
+                    const now = Cesium.JulianDate.now();
+                    if (entity.position && typeof entity.position.getValue === 'function') {
+                        const position = entity.position.getValue(now);
+                        if (position) {
+                            return position;
+                        }
+                    }
+
+                    if (entity.polygon && entity.polygon.hierarchy && typeof entity.polygon.hierarchy.getValue === 'function') {
+                        const hierarchy = entity.polygon.hierarchy.getValue(now);
+                        if (hierarchy && hierarchy.positions && hierarchy.positions.length > 0) {
+                            const center = new Cesium.Cartesian3();
+                            for (const pos of hierarchy.positions) {
+                                Cesium.Cartesian3.add(center, pos, center);
+                            }
+                            return Cesium.Cartesian3.multiplyByScalar(center, 1 / hierarchy.positions.length, center);
+                        }
+                    }
+
+                    return null;
+                }
+
+                let riskRingEntities = [];
+
+                function clearRiskRings() {
+                    riskRingEntities.forEach(ring => viewer.entities.remove(ring));
+                    riskRingEntities = [];
+                }
+
+                function addRiskRingsForEntity(entity) {
+                    const riskColor = getRiskColor(entity);
+                    if (!riskColor) {
+                        return;
+                    }
+
+                    const centerPosition = getEntityCenterPosition(entity);
+                    if (!centerPosition) {
+                        return;
+                    }
+
+                    const innerFill = viewer.entities.add({
+                        position: centerPosition,
+                        ellipse: {
+                            semiMajorAxis: 1.3,
+                            semiMinorAxis: 1.3,
+                            material: riskColor.withAlpha(0.28),
+                            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                            zIndex: 20
+                        }
+                    });
+
+                    const middleFill = viewer.entities.add({
+                        position: centerPosition,
+                        ellipse: {
+                            semiMajorAxis: 2.4,
+                            semiMinorAxis: 2.4,
+                            material: riskColor.withAlpha(0.16),
+                            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                            zIndex: 19
+                        }
+                    });
+
+                    const outerOutline = viewer.entities.add({
+                        position: centerPosition,
+                        ellipse: {
+                            semiMajorAxis: 3.6,
+                            semiMinorAxis: 3.6,
+                            material: Cesium.Color.TRANSPARENT,
+                            outline: true,
+                            outlineColor: riskColor.withAlpha(0.95),
+                            outlineWidth: 3,
+                            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                            zIndex: 18
+                        }
+                    });
+
+                    riskRingEntities.push(innerFill, middleFill, outerOutline);
+                }
+
+                function refreshAllRiskRings() {
+                    clearRiskRings();
+                    entities.forEach(entity => addRiskRingsForEntity(entity));
                 }
 
                 function renderEntityInfo(entity) {
@@ -337,11 +544,17 @@
                         infoHtml += '<table style="width: 100%; border-collapse: collapse;">';
 
                         window.propertyOrder.forEach(key => {
-                            if (entity.properties[key] !== undefined) {
-                                const rawValue = getPropertyValue(entity.properties[key]);
+                            const isEditableScoreField = key === '_Jukei' || key === '_Jusei';
+                            const isRiskField = key === '_RISK_LEVEL';
+                            if (entity.properties[key] !== undefined || isEditableScoreField || isRiskField) {
+                                const rawValue = entity.properties[key] !== undefined ? getPropertyValue(entity.properties[key]) : undefined;
                                 const value = getFormattedPropertyValue(rawValue);
                                 const displayName = propertyMapping[key] || key;
-                                const valueHtml = key === '_AIM_VSTATUS' ? buildStatusSelect(value) : value;
+                                const valueHtml = isRiskField
+                                        ? getRiskLevelLabel(entity)
+                                    : isEditableScoreField
+                                        ? buildScoreSelect(key, value)
+                                        : value;
 
                                 infoHtml += `
                                     <tr>
@@ -358,18 +571,154 @@
                     entityInfo.innerHTML = infoHtml;
                 }
 
-                window.updateCurrentEntityStatus = function(newStatus) {
+                window.updateCurrentEntityScore = function(fieldKey, newValue) {
                     if (!window.currentEntity || !window.currentEntity.properties) {
                         return;
                     }
 
-                    const statusProperty = window.currentEntity.properties._AIM_VSTATUS;
-                    if (statusProperty && typeof statusProperty.setValue === 'function') {
-                        statusProperty.setValue(newStatus);
-                    } else {
-                        window.currentEntity.properties._AIM_VSTATUS = newStatus;
+                    if (fieldKey !== '_Jukei' && fieldKey !== '_Jusei') {
+                        return;
                     }
+
+                    if (newValue === '') {
+                        const targetProperty = window.currentEntity.properties[fieldKey];
+                        if (targetProperty && typeof targetProperty.setValue === 'function') {
+                            targetProperty.setValue('');
+                        } else if (typeof window.currentEntity.properties.addProperty === 'function' && window.currentEntity.properties[fieldKey] === undefined) {
+                            window.currentEntity.properties.addProperty(fieldKey, new Cesium.ConstantProperty(''));
+                        } else {
+                            window.currentEntity.properties[fieldKey] = '';
+                        }
+
+                        renderEntityInfo(window.currentEntity);
+                        refreshAllRiskRings();
+                        viewer.scene.requestRender();
+                        return;
+                    }
+
+                    const parsed = Number(newValue);
+                    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5) {
+                        return;
+                    }
+
+                    const targetProperty = window.currentEntity.properties[fieldKey];
+                    if (targetProperty && typeof targetProperty.setValue === 'function') {
+                        targetProperty.setValue(parsed);
+                    } else if (typeof window.currentEntity.properties.addProperty === 'function') {
+                        window.currentEntity.properties.addProperty(fieldKey, new Cesium.ConstantProperty(parsed));
+                    } else {
+                        window.currentEntity.properties[fieldKey] = parsed;
+                    }
+
+                    renderEntityInfo(window.currentEntity);
+                    refreshAllRiskRings();
+                    viewer.scene.requestRender();
                 };
+
+                // 画像ポップアップ処理
+                const RAW_BASE = 'https://raw.githubusercontent.com/yasu-bsy/CesiumApp/main/Tree-risk-assessment/assets/';
+
+                function openImageModal(fdId) {
+                    const url = RAW_BASE + fdId + '_snapshot.jpg';
+                    const modal = document.getElementById('imageModal');
+                    const img = document.getElementById('imageModalImg');
+                    const title = document.getElementById('imageModalTitle');
+                    img.src = url;
+                    title.textContent = 'ID: ' + fdId + '  スナップショット';
+                    modal.classList.add('active');
+                }
+
+                function closeImageModal() {
+                    const modal = document.getElementById('imageModal');
+                    modal.classList.remove('active');
+                    document.getElementById('imageModalImg').src = '';
+                }
+
+                document.getElementById('imageModalClose').addEventListener('click', closeImageModal);
+                document.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape') closeImageModal();
+                });
+
+                // 画像パネルのドラッグ
+                (function() {
+                    const panel = document.getElementById('imageModal');
+                    const header = document.getElementById('imageModalHeader');
+                    let dragging = false, ox = 0, oy = 0;
+                    header.addEventListener('mousedown', function(e) {
+                        dragging = true;
+                        const rect = panel.getBoundingClientRect();
+                        ox = e.clientX - rect.left;
+                        oy = e.clientY - rect.top;
+                        e.preventDefault();
+                    });
+                    document.addEventListener('mousemove', function(e) {
+                        if (!dragging) return;
+                        panel.style.left = (e.clientX - ox) + 'px';
+                        panel.style.top  = (e.clientY - oy) + 'px';
+                        panel.style.right = 'auto';
+                    });
+                    document.addEventListener('mouseup', function() { dragging = false; });
+                })();
+
+                // FD_IDに対応する画像が存在するかチェック（存在する場合のみポップアップ）
+                window._snapshotCache = {};
+                function tryShowSnapshot(fdId) {
+                    if (window._snapshotCache[fdId] === true) {
+                        openImageModal(fdId);
+                        return;
+                    }
+                    if (window._snapshotCache[fdId] === false) return;
+                    const url = RAW_BASE + fdId + '_snapshot.jpg';
+                    const probe = new Image();
+                    probe.onload = function() {
+                        window._snapshotCache[fdId] = true;
+                        openImageModal(fdId);
+                    };
+                    probe.onerror = function() {
+                        window._snapshotCache[fdId] = false;
+                    };
+                    probe.src = url;
+                }
+
+                function isGeoJsonEntity(entity) {
+                    return Cesium.defined(entity) && dataSource.entities.contains(entity);
+                }
+
+                function getGeoJsonEntityFromPickedObject(pickedObject) {
+                    if (!Cesium.defined(pickedObject)) {
+                        return null;
+                    }
+
+                    if (isGeoJsonEntity(pickedObject.id)) {
+                        return pickedObject.id;
+                    }
+
+                    if (Cesium.defined(pickedObject.primitive) && isGeoJsonEntity(pickedObject.primitive.id)) {
+                        return pickedObject.primitive.id;
+                    }
+
+                    return null;
+                }
+
+                refreshAllRiskRings();
+
+                const defaultLeftClickAction = viewer.screenSpaceEventHandler.getInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK);
+                viewer.screenSpaceEventHandler.setInputAction(function(movement) {
+                    const pickedObjects = viewer.scene.drillPick(movement.position, 20) || [];
+
+                    for (const pickedObject of pickedObjects) {
+                        const pickedEntity = getGeoJsonEntityFromPickedObject(pickedObject);
+                        if (pickedEntity) {
+                            viewer.selectedEntity = pickedEntity;
+                            viewer.scene.requestRender();
+                            return;
+                        }
+                    }
+
+                    if (defaultLeftClickAction) {
+                        defaultLeftClickAction(movement);
+                    }
+                }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
                 
                 // エンティティ選択時のイベントリスナー
                 viewer.selectedEntityChanged.addEventListener(function(entity) {
@@ -398,6 +747,11 @@
                         
                         // 属性情報を表示
                         renderEntityInfo(entity);
+
+                        // _FD_IDに対応するスナップショット画像があれば表示
+                        if (entity._storeFdId !== undefined) {
+                            tryShowSnapshot(entity._storeFdId);
+                        }
                     } else {
                         // パネルを非表示
                         panel.style.display = 'none';
