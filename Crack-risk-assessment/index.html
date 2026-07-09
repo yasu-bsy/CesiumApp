@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Crack Risk Assessment</title>
+	<script src="https://cesium.com/downloads/cesiumjs/releases/1.117/Build/Cesium/Cesium.js"></script>
+	<link href="https://cesium.com/downloads/cesiumjs/releases/1.117/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+	<style>
+		html,
+		body,
+		#cesiumContainer {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			padding: 0;
+			overflow: hidden;
+		}
+
+		#controlPanel {
+			position: absolute;
+			top: 12px;
+			left: 12px;
+			z-index: 10;
+			background: rgba(40, 40, 40, 0.85);
+			color: #ffffff;
+			padding: 8px 10px;
+			border-radius: 6px;
+			font-family: sans-serif;
+			font-size: 14px;
+		}
+
+		.controlRow {
+			display: flex;
+			align-items: center;
+			margin-bottom: 6px;
+		}
+
+		.controlRow label {
+			width: 120px;
+		}
+
+		#roadWidthInput {
+			width: 90px;
+			margin-left: 6px;
+		}
+
+		#segmentLengthInput {
+			width: 90px;
+			margin-left: 6px;
+		}
+
+		#crackRatioValue {
+			display: inline-block;
+			width: 90px;
+			margin-left: 6px;
+		}
+
+		.buttonRow {
+			display: flex;
+			gap: 6px;
+			margin-top: 8px;
+		}
+
+		#clearButton,
+		#setButton,
+		#exportSetButton,
+		#importSetButton,
+		#shareUrlButton {
+			flex: 1;
+			padding: 6px 10px;
+			border: none;
+			border-radius: 4px;
+			color: #ffffff;
+			font-size: 13px;
+			cursor: pointer;
+		}
+
+		#clearButton {
+			background: #444444;
+		}
+
+		#clearButton:hover {
+			background: #5a5a5a;
+		}
+
+		#setButton {
+			background: #2a6fa8;
+		}
+
+		#setButton:hover {
+			background: #3585c5;
+		}
+
+		#exportSetButton,
+		#importSetButton {
+			background: #555555;
+		}
+
+		#exportSetButton:hover,
+		#importSetButton:hover {
+			background: #6a6a6a;
+		}
+
+		#shareUrlButton {
+			background: #2e7d32;
+		}
+
+		#shareUrlButton:hover {
+			background: #388e3c;
+		}
+
+		#meshInfoPanel {
+			position: absolute;
+			top: 12px;
+			right: 12px;
+			z-index: 10;
+			background: rgba(40, 40, 40, 0.95);
+			color: #ffffff;
+			padding: 12px 15px;
+			border-radius: 6px;
+			font-family: sans-serif;
+			font-size: 13px;
+			display: none;
+			min-width: 280px;
+			box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+			cursor: grab;
+			user-select: none;
+		}
+
+		#meshInfoPanel.dragging {
+			cursor: grabbing;
+		}
+
+		#meshInfoPanel.active {
+			display: block;
+		}
+
+		#meshInfoPanel h3 {
+			margin: 0 0 10px 0;
+			color: #ffcc00;
+		}
+
+		.meshInfoItem {
+			margin-bottom: 10px;
+			line-height: 1.6;
+		}
+
+		.meshInfoLabel {
+			font-weight: bold;
+			color: #88ccff;
+		}
+
+		#crackAreaItem {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			width: fit-content;
+		}
+
+		#crackAreaInput {
+			width: 72px;
+			padding: 4px 6px;
+			border: 1px solid #666;
+			border-radius: 3px;
+			background: #333;
+			color: #ffffff;
+			font-size: 12px;
+		}
+
+		#tablePanel {
+			position: absolute;
+			bottom: 12px;
+			left: 12px;
+			z-index: 10;
+			background: rgba(40, 40, 40, 0.95);
+			color: #ffffff;
+			border-radius: 6px;
+			font-family: sans-serif;
+			font-size: 13px;
+			display: none;
+			flex-direction: column;
+			min-width: 380px;
+			min-height: 180px;
+			height: 260px;
+			max-height: 80vh;
+			box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+			overflow: hidden;
+			box-sizing: border-box;
+		}
+
+		#tablePanel.active {
+			display: flex;
+		}
+
+		#tablePanelHeader {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 7px 12px;
+			background: rgba(60, 60, 60, 0.98);
+			border-radius: 6px 6px 0 0;
+			cursor: grab;
+			user-select: none;
+		}
+
+		#tablePanelHeader.dragging {
+			cursor: grabbing;
+		}
+
+		#tablePanelHeader h3 {
+			margin: 0;
+			color: #ffcc00;
+			font-size: 13px;
+		}
+
+		#tableScrollBody {
+			overflow-y: auto;
+			flex: 1;
+		}
+
+		#meshTable {
+			width: 100%;
+			border-collapse: collapse;
+		}
+
+		#meshTable thead th {
+			position: sticky;
+			top: 0;
+			background: rgba(60, 60, 60, 0.98);
+			padding: 5px 10px;
+			text-align: left;
+			color: #88ccff;
+			font-weight: bold;
+			border-bottom: 1px solid #555;
+		}
+
+		#meshTable tbody tr {
+			cursor: pointer;
+			outline: none;
+		}
+
+		#meshTable tbody tr:hover {
+			background: rgba(80, 80, 80, 0.8);
+		}
+
+		#meshTable tbody tr.active {
+			background: rgba(0, 120, 200, 0.35);
+		}
+
+		#meshTable tbody td {
+			padding: 4px 10px;
+			border-bottom: 1px solid #3a3a3a;
+		}
+
+		.tableCrackInput {
+			width: 72px;
+			padding: 2px 5px;
+			border: 1px solid #666;
+			border-radius: 3px;
+			background: #333;
+			color: #ffffff;
+			font-size: 12px;
+		}
+
+	</style>
+</head>
+<body>
+	<div id="controlPanel">
+		<div class="controlRow">
+			<label for="segmentLengthInput">測定区間長さ (m)</label>
+			<input id="segmentLengthInput" type="number" min="0" step="0.1" value="20.0">
+		</div>
+		<div class="controlRow">
+			<label for="roadWidthInput">道路幅 (m)</label>
+			<input id="roadWidthInput" type="number" min="0" step="0.1" value="5.0">
+		</div>
+		<div class="controlRow">
+			<label>ひび割れ率 (%)</label>
+			<span id="crackRatioValue">0.00</span>
+		</div>
+		<div class="buttonRow">
+			<button id="clearButton" type="button">クリア</button>
+			<button id="setButton" type="button">セット</button>
+		</div>
+		<div class="buttonRow">
+			<button id="exportSetButton" type="button">エクスポート</button>
+			<button id="importSetButton" type="button">インポート</button>
+		</div>
+		<div class="buttonRow">
+			<button id="shareUrlButton" type="button">URLをコピー</button>
+		</div>
+		<input id="importSetFileInput" type="file" accept=".geojson,.json,application/geo+json,application/json" style="display: none;">
+	</div>
+	<div id="tablePanel">
+		<div id="tablePanelHeader">
+			<h3>GeoJSON テーブル</h3>
+		</div>
+		<div id="tableScrollBody">
+			<table id="meshTable">
+				<thead>
+					<tr>
+						<th>メッシュID</th>
+						<th>セル面積 (m²)</th>
+						<th>ひび割れ面積 (m²)</th>
+					</tr>
+				</thead>
+				<tbody id="meshTableBody"></tbody>
+			</table>
+		</div>
+	</div>
+	<div id="meshInfoPanel">
+		<h3>メッシュ情報</h3>
+		<div class="meshInfoItem">
+			<span class="meshInfoLabel">メッシュID:</span>
+			<span id="meshId">-</span>
+		</div>
+		<div class="meshInfoItem">
+			<span class="meshInfoLabel">セル面積:</span>
+			<span id="cellArea">-</span> m²
+		</div>
+		<div id="crackAreaItem" class="meshInfoItem">
+			<span class="meshInfoLabel">ひび割れ面積:</span>
+			<input id="crackAreaInput" type="number" min="0" step="0.01" placeholder="m²">
+			<span>m<sup>2</sup></span>
+		</div>
+	</div>
+	<div id="cesiumContainer"></div>
+
+	<script>
+		const ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o';
+		const ASSET_ID = 5025204;
+
+		Cesium.Ion.defaultAccessToken = ACCESS_TOKEN;
+
+		async function initializeViewer() {
+			const viewer = new Cesium.Viewer('cesiumContainer', {
+				terrain: Cesium.Terrain.fromWorldTerrain()
+			});
+
+			try {
+				const imageryProvider = await Cesium.IonImageryProvider.fromAssetId(ASSET_ID);
+				const imageryLayer = viewer.imageryLayers.addImageryProvider(imageryProvider);
+				await viewer.zoomTo(imageryLayer);
+				enableTwoPointLineDrawing(viewer);
+			} catch (error) {
+				console.error(`Imagery Asset ${ASSET_ID} の読み込みに失敗しました:`, error);
+			}
+		}
+
+		function enableTwoPointLineDrawing(viewer) {
+			const segmentLengthInput = document.getElementById('segmentLengthInput');
+			const roadWidthInput = document.getElementById('roadWidthInput');
+			const crackRatioValue = document.getElementById('crackRatioValue');
+			const clearButton = document.getElementById('clearButton');
+			const setButton = document.getElementById('setButton');
+			const exportSetButton = document.getElementById('exportSetButton');
+			const importSetButton = document.getElementById('importSetButton');
+			const importSetFileInput = document.getElementById('importSetFileInput');
+			const shareUrlButton = document.getElementById('shareUrlButton');
+			const meshInfoPanel = document.getElementById('meshInfoPanel');
+			const crackAreaInput = document.getElementById('crackAreaInput');
+			const tablePanel = document.getElementById('tablePanel');
+			const tablePanelHeader = document.getElementById('tablePanelHeader');
+			const meshTableBody = document.getElementById('meshTableBody');
+			const selectedPoints = [];
+			const pointEntities = [];
+			let lineEntity = null;
+			let gridEntities = [];
+			let drawingLocked = false;
+			const SURFACE_OFFSET_METERS = 0.1;
+			const FIXED_SEGMENT_LENGTH_METERS = 20;
+			const GRID_SIZE_METERS = 0.5;
+			const GRID_LINE_WIDTH_INNER = 1;
+			const GRID_LINE_WIDTH_OUTER = 2;
+			const CELL_AREA_SQUARE_METERS = GRID_SIZE_METERS * GRID_SIZE_METERS;
+
+			let geoJsonData = {
+				type: 'FeatureCollection',
+				features: []
+			};
+			let meshIdMap = {};
+			let selectedMeshId = null;
+			let centerMarkerEntityMap = {};
+			let frozenAreaCorners = null;
+			let setResultEntities = [];
+			let setResultRecords = [];
+			let previewLineEntity = null;
+
+			function clearGrid() {
+				selectedPoints.length = 0;
+
+				if (previewLineEntity) {
+					viewer.entities.remove(previewLineEntity);
+					previewLineEntity = null;
+				}
+
+				pointEntities.forEach((entity) => viewer.entities.remove(entity));
+				pointEntities.length = 0;
+
+				if (lineEntity) {
+					viewer.entities.remove(lineEntity);
+					lineEntity = null;
+				}
+
+				gridEntities.forEach((entity) => viewer.entities.remove(entity));
+				gridEntities = [];
+				geoJsonData.features = [];
+				meshIdMap = {};
+				selectedMeshId = null;
+				centerMarkerEntityMap = {};
+				frozenAreaCorners = null;
+				crackAreaInput.value = '';
+				updateCrackRatioDisplay();
+				meshInfoPanel.classList.remove('active');
+				meshTableBody.innerHTML = '';
+				tablePanel.classList.remove('active');
+				drawingLocked = false;
+			}
+
+			function clearDrawing() {
+				clearGrid();
+				setResultEntities.forEach((entity) => viewer.entities.remove(entity));
+				setResultEntities = [];
+				setResultRecords = [];
+			}
+
+			function getAreaColorByRatio(crackRatio) {
+				if (crackRatio <= 20) {
+					return Cesium.Color.BLUE;
+				}
+				if (crackRatio > 40) {
+					return Cesium.Color.RED;
+				}
+				return Cesium.Color.YELLOW;
+			}
+
+			function createSetAreaRecord(corners, crackRatio) {
+				const areaColor = getAreaColorByRatio(crackRatio);
+				const cornerCoordinates = corners.map((corner) => toGeoJsonCoordinate(corner));
+				cornerCoordinates.push([...cornerCoordinates[0]]);
+
+				const centerPoint = calculateMeshCenter(corners[0], corners[1], corners[2], corners[3]);
+				const centerCoordinates = toGeoJsonCoordinate(centerPoint);
+
+				return {
+					corners,
+					crackRatio,
+					colorName: areaColor === Cesium.Color.BLUE ? 'BLUE' : (areaColor === Cesium.Color.RED ? 'RED' : 'YELLOW'),
+					polygonCoordinates: cornerCoordinates,
+					centerCoordinates
+				};
+			}
+
+			async function renderSetArea(record) {
+				const areaColor = getAreaColorByRatio(record.crackRatio);
+				const raisedCorners = await sampleAndRaisePositions(record.corners);
+				const areaCenter = calculateMeshCenter(record.corners[0], record.corners[1], record.corners[2], record.corners[3]);
+				const raisedCenter = await sampleAndRaisePositions([areaCenter]);
+
+				const polygonEntity = viewer.entities.add({
+					polygon: {
+						hierarchy: new Cesium.PolygonHierarchy(raisedCorners),
+						material: areaColor.withAlpha(0.25),
+						outline: true,
+						outlineColor: areaColor,
+						outlineWidth: 2,
+						perPositionHeight: true
+					}
+				});
+
+				const labelEntity = viewer.entities.add({
+					position: raisedCenter[0],
+					label: {
+						text: `${record.crackRatio.toFixed(2)} %`,
+						font: 'bold 16px sans-serif',
+						fillColor: Cesium.Color.WHITE,
+						outlineColor: Cesium.Color.BLACK,
+						outlineWidth: 2,
+						style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+						heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+						disableDepthTestDistance: Number.POSITIVE_INFINITY
+					}
+				});
+
+				setResultEntities.push(polygonEntity, labelEntity);
+			}
+
+			function exportSetAreasToGeoJSON() {
+				const features = setResultRecords.map((record, index) => ({
+					type: 'Feature',
+					id: `SET_AREA_${String(index + 1).padStart(3, '0')}`,
+					properties: {
+						crackRatio: Number(record.crackRatio.toFixed(2)),
+						color: record.colorName
+					},
+					geometry: {
+						type: 'Polygon',
+						coordinates: [record.polygonCoordinates]
+					}
+				}));
+
+				return {
+					type: 'FeatureCollection',
+					features
+				};
+			}
+
+			function parseSetAreasFromGeoJSON(data) {
+				if (!data || data.type !== 'FeatureCollection' || !Array.isArray(data.features)) {
+					throw new Error('FeatureCollection 形式のGeoJSONではありません。');
+				}
+
+				return data.features
+					.filter((feature) => feature?.geometry?.type === 'Polygon' && Array.isArray(feature.geometry.coordinates?.[0]))
+					.map((feature) => {
+						const ring = feature.geometry.coordinates[0];
+						if (ring.length < 4) {
+							throw new Error('Polygonの座標点が不足しています。');
+						}
+
+						const corners = ring.slice(0, 4).map(([lon, lat]) =>
+							Cesium.Cartesian3.fromDegrees(lon, lat, SURFACE_OFFSET_METERS)
+						);
+
+						const ratioValue = Number.parseFloat(feature.properties?.crackRatio);
+						const crackRatio = Number.isFinite(ratioValue) ? ratioValue : 0;
+
+						return createSetAreaRecord(corners, crackRatio);
+					});
+			}
+
+			function toGeoJsonCoordinate(cartesian) {
+				const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+				return [Cesium.Math.toDegrees(cartographic.longitude), Cesium.Math.toDegrees(cartographic.latitude)];
+			}
+
+			function calculateMeshCenter(corner1, corner2, corner3, corner4) {
+				return Cesium.BoundingSphere.fromPoints([corner1, corner2, corner3, corner4]).center;
+			}
+
+			function createMeshGeometry(centerPoint) {
+				return {
+					type: 'Point',
+					coordinates: toGeoJsonCoordinate(centerPoint)
+				};
+			}
+
+			function addMeshFeature(meshId, row, col, corner1, corner2, corner3, corner4) {
+				const centerPoint = calculateMeshCenter(corner1, corner2, corner3, corner4);
+				const feature = {
+					type: 'Feature',
+					id: meshId,
+					properties: {
+						meshId: meshId,
+						row: row,
+						col: col,
+						cellArea: CELL_AREA_SQUARE_METERS,
+						crackArea: 0
+					},
+					geometry: createMeshGeometry(centerPoint)
+				};
+
+				geoJsonData.features.push(feature);
+				meshIdMap[meshId] = feature;
+			}
+
+			function updateMeshPanel(meshId) {
+				if (meshIdMap[meshId]) {
+					const props = meshIdMap[meshId].properties;
+					document.getElementById('meshId').textContent = meshId;
+					document.getElementById('cellArea').textContent = props.cellArea.toFixed(4);
+					crackAreaInput.value = props.crackArea;
+					updateCrackRatioDisplay();
+					meshInfoPanel.classList.add('active');
+				}
+			}
+
+			async function sampleAndRaisePositions(cartesianPositions, offsetMeters = SURFACE_OFFSET_METERS) {
+				const cartographics = cartesianPositions.map((position) => Cesium.Cartographic.fromCartesian(position));
+
+				try {
+					await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, cartographics);
+				} catch (error) {
+					console.warn('地形サンプリングに失敗したため、既存高さを利用します:', error);
+				}
+
+				return cartographics.map((cartographic) => {
+					const sampledHeight = Number.isFinite(cartographic.height) ? cartographic.height : 0;
+					return Cesium.Cartesian3.fromRadians(
+						cartographic.longitude,
+						cartographic.latitude,
+						sampledHeight + offsetMeters
+					);
+				});
+			}
+
+			function createFixedLengthEndpoint(start, axisPoint, lengthMeters = FIXED_SEGMENT_LENGTH_METERS) {
+				const enuTransform = Cesium.Transforms.eastNorthUpToFixedFrame(start);
+				const inverseEnuTransform = Cesium.Matrix4.inverse(enuTransform, new Cesium.Matrix4());
+				const axisPointLocal = Cesium.Matrix4.multiplyByPoint(inverseEnuTransform, axisPoint, new Cesium.Cartesian3());
+
+				const horizontalDirectionLocal = new Cesium.Cartesian3(axisPointLocal.x, axisPointLocal.y, 0);
+				const horizontalMagnitude = Cesium.Cartesian3.magnitude(horizontalDirectionLocal);
+
+				if (!Number.isFinite(horizontalMagnitude) || horizontalMagnitude < 1e-6) {
+					return null;
+				}
+
+				const unitDirectionLocal = Cesium.Cartesian3.normalize(horizontalDirectionLocal, new Cesium.Cartesian3());
+				const fixedEndpointLocal = Cesium.Cartesian3.multiplyByScalar(unitDirectionLocal, lengthMeters, new Cesium.Cartesian3());
+
+				return Cesium.Matrix4.multiplyByPoint(enuTransform, fixedEndpointLocal, new Cesium.Cartesian3());
+			}
+
+			function createGridOffsets(maxValue, step) {
+				const offsets = [];
+
+				for (let value = 0; value <= maxValue + 1e-6; value += step) {
+					offsets.push(Math.min(value, maxValue));
+				}
+
+				if (offsets.length === 0 || Math.abs(offsets[offsets.length - 1] - maxValue) > 1e-6) {
+					offsets.push(maxValue);
+				}
+
+				return offsets;
+			}
+
+			function updateCrackRatioDisplay() {
+				const totalCrackArea = geoJsonData.features.reduce((sum, feature) => {
+					const value = Number.parseFloat(feature.properties?.crackArea);
+					return sum + (Number.isFinite(value) && value >= 0 ? value : 0);
+				}, 0);
+				const segmentLength = Number.parseFloat(segmentLengthInput.value) || 0;
+				const roadWidth = Number.parseFloat(roadWidthInput.value) || 0;
+
+				let crackRatio = 0;
+				if (segmentLength > 0 && roadWidth > 0) {
+					crackRatio = (totalCrackArea / segmentLength / roadWidth) * 100;
+				}
+
+				crackRatioValue.textContent = crackRatio.toFixed(2);
+			}
+
+			function getClickedPosition(position) {
+				let cartesian;
+
+				if (viewer.scene.pickPositionSupported) {
+					cartesian = viewer.scene.pickPosition(position);
+				}
+
+				if (!Cesium.defined(cartesian)) {
+					cartesian = viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid);
+				}
+
+				return cartesian;
+			}
+
+			clearButton.addEventListener('click', clearGrid);
+
+			setButton.addEventListener('click', async () => {
+				if (!frozenAreaCorners || !drawingLocked) {
+					return;
+				}
+
+				const crackRatio = Number.parseFloat(crackRatioValue.textContent) || 0;
+				const setAreaRecord = createSetAreaRecord(frozenAreaCorners, crackRatio);
+				setResultRecords.push(setAreaRecord);
+				await renderSetArea(setAreaRecord);
+				clearGrid();
+			});
+
+			exportSetButton.addEventListener('click', () => {
+				if (setResultRecords.length === 0) {
+					return;
+				}
+
+				const geojson = exportSetAreasToGeoJSON();
+				const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/geo+json' });
+				const url = URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = `set-areas-${new Date().toISOString().replace(/[:.]/g, '-')}.geojson`;
+				document.body.appendChild(a);
+				a.click();
+				document.body.removeChild(a);
+				URL.revokeObjectURL(url);
+			});
+
+			importSetButton.addEventListener('click', () => {
+				importSetFileInput.click();
+			});
+
+			importSetFileInput.addEventListener('change', async (event) => {
+				const file = event.target.files?.[0];
+				if (!file) {
+					return;
+				}
+
+				try {
+					const text = await file.text();
+					const parsed = JSON.parse(text);
+					const importedRecords = parseSetAreasFromGeoJSON(parsed);
+
+					setResultEntities.forEach((entity) => viewer.entities.remove(entity));
+					setResultEntities = [];
+					setResultRecords = [];
+
+					for (const record of importedRecords) {
+						setResultRecords.push(record);
+						await renderSetArea(record);
+					}
+				} catch (error) {
+					console.error('セット済み長方形のインポートに失敗しました:', error);
+				}
+
+				importSetFileInput.value = '';
+			});
+
+			crackAreaInput.addEventListener('input', () => {
+				const inputValue = Number.parseFloat(crackAreaInput.value);
+				const crackArea = Number.isFinite(inputValue) && inputValue >= 0 ? inputValue : 0;
+				if (selectedMeshId && meshIdMap[selectedMeshId]) {
+					meshIdMap[selectedMeshId].properties.crackArea = crackArea;
+				}
+				syncTableCell(selectedMeshId);
+				updateCrackRatioDisplay();
+			});
+
+			segmentLengthInput.addEventListener('input', updateCrackRatioDisplay);
+			roadWidthInput.addEventListener('input', updateCrackRatioDisplay);
+			updateCrackRatioDisplay();
+
+			let isDraggingPanel = false;
+			let dragStartX = 0;
+			let dragStartY = 0;
+			let dragOffsetX = 0;
+			let dragOffsetY = 0;
+
+			meshInfoPanel.addEventListener('pointerdown', (event) => {
+				if (event.target === crackAreaInput || crackAreaInput.contains(event.target)) {
+					return;
+				}
+
+				isDraggingPanel = true;
+				dragStartX = event.clientX;
+				dragStartY = event.clientY;
+				meshInfoPanel.classList.add('dragging');
+				meshInfoPanel.setPointerCapture(event.pointerId);
+			});
+
+			meshInfoPanel.addEventListener('pointermove', (event) => {
+				if (!isDraggingPanel) {
+					return;
+				}
+
+				dragOffsetX += event.clientX - dragStartX;
+				dragOffsetY += event.clientY - dragStartY;
+				dragStartX = event.clientX;
+				dragStartY = event.clientY;
+				meshInfoPanel.style.transform = `translate(${dragOffsetX}px, ${dragOffsetY}px)`;
+			});
+
+			function stopPanelDrag(event) {
+				if (!isDraggingPanel) {
+					return;
+				}
+
+				isDraggingPanel = false;
+				meshInfoPanel.classList.remove('dragging');
+				if (event && meshInfoPanel.hasPointerCapture(event.pointerId)) {
+					meshInfoPanel.releasePointerCapture(event.pointerId);
+				}
+			}
+
+			meshInfoPanel.addEventListener('pointerup', stopPanelDrag);
+			meshInfoPanel.addEventListener('pointercancel', stopPanelDrag);
+
+			function highlightMarker(meshId, isHighlighted) {
+				const entity = centerMarkerEntityMap[meshId];
+				if (!entity) {
+					return;
+				}
+
+				entity.point.color = isHighlighted ? Cesium.Color.ORANGE : Cesium.Color.LIME;
+				entity.point.pixelSize = isHighlighted ? 12 : 6;
+				entity.point.outlineWidth = isHighlighted ? 2 : 1;
+			}
+
+			function syncTableCell(meshId) {
+				if (!meshId) {
+					return;
+				}
+
+				const row = meshTableBody.querySelector(`tr[data-mesh-id="${meshId}"]`);
+				if (row) {
+					const input = row.querySelector('.tableCrackInput');
+					if (input && document.activeElement !== input) {
+						input.value = meshIdMap[meshId]?.properties?.crackArea ?? '';
+					}
+				}
+			}
+
+			function selectMeshById(meshId) {
+				if (selectedMeshId && selectedMeshId !== meshId) {
+					highlightMarker(selectedMeshId, false);
+					const prevRow = meshTableBody.querySelector(`tr[data-mesh-id="${selectedMeshId}"]`);
+					if (prevRow) {
+						prevRow.classList.remove('active');
+					}
+				}
+
+				selectedMeshId = meshId;
+				highlightMarker(meshId, true);
+				updateMeshPanel(meshId);
+
+				const row = meshTableBody.querySelector(`tr[data-mesh-id="${meshId}"]`);
+				if (row) {
+					row.classList.add('active');
+					row.scrollIntoView({ block: 'nearest' });
+				}
+			}
+
+			function buildMeshTable() {
+				meshTableBody.innerHTML = '';
+
+				geoJsonData.features.forEach((feature) => {
+					const meshId = feature.properties.meshId;
+					const tr = document.createElement('tr');
+					tr.dataset.meshId = meshId;
+
+					const tdId = document.createElement('td');
+					tdId.textContent = meshId;
+
+					const tdArea = document.createElement('td');
+					tdArea.textContent = feature.properties.cellArea.toFixed(4);
+
+					const tdCrack = document.createElement('td');
+					const crackInput = document.createElement('input');
+					crackInput.type = 'number';
+					crackInput.min = '0';
+					crackInput.step = '0.01';
+					crackInput.className = 'tableCrackInput';
+					crackInput.value = feature.properties.crackArea || '';
+
+					crackInput.addEventListener('focus', () => {
+						selectMeshById(meshId);
+					});
+
+					crackInput.addEventListener('input', () => {
+						const val = Number.parseFloat(crackInput.value);
+						const crackArea = Number.isFinite(val) && val >= 0 ? val : 0;
+						if (meshIdMap[meshId]) {
+							meshIdMap[meshId].properties.crackArea = crackArea;
+						}
+
+						if (selectedMeshId === meshId) {
+							crackAreaInput.value = crackArea;
+						}
+
+						updateCrackRatioDisplay();
+					});
+
+					crackInput.addEventListener('keydown', (event) => {
+						const rows = Array.from(meshTableBody.querySelectorAll('tr'));
+						const idx = rows.indexOf(tr);
+
+						if (event.key === 'ArrowDown' || (event.key === 'Tab' && !event.shiftKey)) {
+							event.preventDefault();
+							const nextRow = rows[idx + 1];
+							if (nextRow) {
+								nextRow.querySelector('.tableCrackInput')?.focus();
+							}
+						} else if (event.key === 'ArrowUp' || (event.key === 'Tab' && event.shiftKey)) {
+							event.preventDefault();
+							const prevRow = rows[idx - 1];
+							if (prevRow) {
+								prevRow.querySelector('.tableCrackInput')?.focus();
+							}
+						}
+					});
+
+					tdCrack.appendChild(crackInput);
+					tr.appendChild(tdId);
+					tr.appendChild(tdArea);
+					tr.appendChild(tdCrack);
+
+					tr.addEventListener('click', (event) => {
+						if (event.target === crackInput) {
+							return;
+						}
+
+						selectMeshById(meshId);
+						crackInput.focus();
+					});
+
+					meshTableBody.appendChild(tr);
+				});
+			}
+
+			let isDraggingTable = false;
+			let isResizingTable = false;
+			let tableResizeEdge = null;
+			let tableDragStartX = 0;
+			let tableDragStartY = 0;
+			let tableDragOffsetX = 0;
+			let tableDragOffsetY = 0;
+			let tableStartHeight = 0;
+			const TABLE_RESIZE_EDGE_PX = 10;
+
+			function getTableResizeEdge(event) {
+				const rect = tablePanel.getBoundingClientRect();
+				const nearTop = Math.abs(event.clientY - rect.top) <= TABLE_RESIZE_EDGE_PX;
+				const nearBottom = Math.abs(event.clientY - rect.bottom) <= TABLE_RESIZE_EDGE_PX;
+				const withinWidth = event.clientX >= rect.left && event.clientX <= rect.right;
+
+				if (withinWidth && nearTop) {
+					return 'top';
+				}
+
+				if (withinWidth && nearBottom) {
+					return 'bottom';
+				}
+
+				return null;
+			}
+
+			function updateTableResizeCursor(event) {
+				if (isDraggingTable || isResizingTable) {
+					return;
+				}
+
+				const edge = getTableResizeEdge(event);
+				const cursor = edge ? 'ns-resize' : '';
+				tablePanel.style.cursor = cursor;
+				tablePanelHeader.style.cursor = cursor;
+				document.body.style.cursor = cursor;
+			}
+
+			tablePanel.addEventListener('pointermove', updateTableResizeCursor);
+
+			tablePanel.addEventListener('pointerdown', (event) => {
+				if (event.target === tablePanelHeader || tablePanelHeader.contains(event.target)) {
+					return;
+				}
+
+				const resizeEdge = getTableResizeEdge(event);
+				if (!resizeEdge) {
+					return;
+				}
+
+				isResizingTable = true;
+				tableResizeEdge = resizeEdge;
+				tableDragStartY = event.clientY;
+				tableStartHeight = tablePanel.getBoundingClientRect().height;
+				tablePanel.style.cursor = 'ns-resize';
+				tablePanelHeader.style.cursor = 'ns-resize';
+				document.body.style.cursor = 'ns-resize';
+				tablePanel.setPointerCapture(event.pointerId);
+			});
+
+			tablePanel.addEventListener('pointermove', (event) => {
+				if (!isResizingTable || tablePanelHeader.hasPointerCapture(event.pointerId)) {
+					return;
+				}
+
+				const deltaY = event.clientY - tableDragStartY;
+				const nextHeight = tableResizeEdge === 'top'
+					? tableStartHeight - deltaY
+					: tableStartHeight + deltaY;
+				const clampedHeight = Math.max(180, Math.min(window.innerHeight * 0.8, nextHeight));
+				tablePanel.style.height = `${clampedHeight}px`;
+			});
+
+			tablePanel.addEventListener('pointerleave', () => {
+				if (!isDraggingTable && !isResizingTable) {
+					tablePanel.style.cursor = '';
+					tablePanelHeader.style.cursor = '';
+					document.body.style.cursor = '';
+				}
+			});
+
+			tablePanelHeader.addEventListener('pointerdown', (event) => {
+				const resizeEdge = getTableResizeEdge(event);
+				if (resizeEdge) {
+					isResizingTable = true;
+					tableResizeEdge = resizeEdge;
+					tableDragStartY = event.clientY;
+					tableStartHeight = tablePanel.getBoundingClientRect().height;
+					tablePanel.style.cursor = 'ns-resize';
+					tablePanelHeader.style.cursor = 'ns-resize';
+					document.body.style.cursor = 'ns-resize';
+					tablePanelHeader.setPointerCapture(event.pointerId);
+					return;
+				}
+
+				isDraggingTable = true;
+				tableDragStartX = event.clientX;
+				tableDragStartY = event.clientY;
+				tablePanelHeader.classList.add('dragging');
+				tablePanelHeader.setPointerCapture(event.pointerId);
+			});
+
+			tablePanelHeader.addEventListener('pointermove', (event) => {
+				if (isResizingTable) {
+					const deltaY = event.clientY - tableDragStartY;
+					const nextHeight = tableResizeEdge === 'top'
+						? tableStartHeight - deltaY
+						: tableStartHeight + deltaY;
+					const clampedHeight = Math.max(180, Math.min(window.innerHeight * 0.8, nextHeight));
+					tablePanel.style.height = `${clampedHeight}px`;
+					return;
+				}
+
+				if (!isDraggingTable) {
+					return;
+				}
+
+				tableDragOffsetX += event.clientX - tableDragStartX;
+				tableDragOffsetY += event.clientY - tableDragStartY;
+				tableDragStartX = event.clientX;
+				tableDragStartY = event.clientY;
+				tablePanel.style.transform = `translate(${tableDragOffsetX}px, ${tableDragOffsetY}px)`;
+			});
+
+			function stopTableDrag(event) {
+				if (isResizingTable) {
+					isResizingTable = false;
+					tableResizeEdge = null;
+					tablePanel.style.cursor = '';
+					tablePanelHeader.style.cursor = '';
+					document.body.style.cursor = '';
+					if (event && tablePanelHeader.hasPointerCapture(event.pointerId)) {
+						tablePanelHeader.releasePointerCapture(event.pointerId);
+					}
+					return;
+				}
+
+				if (!isDraggingTable) {
+					return;
+				}
+
+				isDraggingTable = false;
+				tablePanelHeader.classList.remove('dragging');
+				if (event && tablePanelHeader.hasPointerCapture(event.pointerId)) {
+					tablePanelHeader.releasePointerCapture(event.pointerId);
+				}
+			}
+
+			tablePanelHeader.addEventListener('pointerup', stopTableDrag);
+			tablePanelHeader.addEventListener('pointercancel', stopTableDrag);
+			tablePanel.addEventListener('pointerup', stopTableDrag);
+			tablePanel.addEventListener('pointercancel', stopTableDrag);
+
+			const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+			handler.setInputAction((movement) => {
+				const pickedObject = viewer.scene.pick(movement.position);
+				if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.meshId) {
+					selectMeshById(pickedObject.id.meshId);
+				}
+			}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+			const handlerDraw = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+			handlerDraw.setInputAction(async (movement) => {
+				if (drawingLocked) {
+					return;
+				}
+
+				const cartesian = getClickedPosition(movement.position);
+
+				if (!Cesium.defined(cartesian)) {
+					return;
+				}
+
+				selectedPoints.push(cartesian);
+
+				if (selectedPoints.length === 1) {
+					pointEntities.push(viewer.entities.add({
+						position: cartesian,
+						point: {
+							pixelSize: 10,
+							color: Cesium.Color.YELLOW,
+							outlineColor: Cesium.Color.BLACK,
+							outlineWidth: 2
+						}
+					}));
+
+					previewLineEntity = viewer.entities.add({
+						polyline: {
+							positions: new Cesium.CallbackProperty(() => {
+								if (selectedPoints.length < 1 || !previewLineEntity._previewEnd) {
+									return [selectedPoints[0], selectedPoints[0]];
+								}
+
+								return [selectedPoints[0], previewLineEntity._previewEnd];
+							}, false),
+							width: 2,
+							material: new Cesium.PolylineDashMaterialProperty({
+								color: Cesium.Color.YELLOW.withAlpha(0.7),
+								dashLength: 12
+							}),
+							clampToGround: true
+						}
+					});
+				}
+
+				if (selectedPoints.length === 2) {
+					if (previewLineEntity) {
+						viewer.entities.remove(previewLineEntity);
+						previewLineEntity = null;
+					}
+
+					const segmentLengthValue = Number.parseFloat(segmentLengthInput.value);
+					const segmentLength = Number.isFinite(segmentLengthValue) && segmentLengthValue > 0
+						? segmentLengthValue
+						: FIXED_SEGMENT_LENGTH_METERS;
+					const roadWidth = Number.parseFloat(roadWidthInput.value);
+					const start = selectedPoints[0];
+					const fixedEnd = createFixedLengthEndpoint(start, selectedPoints[1], segmentLength);
+
+					if (!Cesium.defined(fixedEnd)) {
+						console.warn('2点が近すぎるため方向を計算できませんでした。少し離れた2点を選択してください。');
+						return;
+					}
+
+					const raisedLinePositions = await sampleAndRaisePositions([start, fixedEnd]);
+
+					lineEntity = viewer.entities.add({
+						polyline: {
+							positions: raisedLinePositions,
+							width: 4,
+							material: Cesium.Color.RED,
+							depthFailMaterial: Cesium.Color.RED,
+							clampToGround: true,
+							zIndex: 2
+						}
+					});
+
+					if (Number.isFinite(roadWidth) && roadWidth > 0) {
+						const end = fixedEnd;
+						const midpoint = Cesium.Cartesian3.midpoint(start, end, new Cesium.Cartesian3());
+
+						const direction = Cesium.Cartesian3.normalize(
+							Cesium.Cartesian3.subtract(end, start, new Cesium.Cartesian3()),
+							new Cesium.Cartesian3()
+						);
+						const up = Cesium.Cartesian3.normalize(midpoint, new Cesium.Cartesian3());
+						const right = Cesium.Cartesian3.normalize(
+							Cesium.Cartesian3.cross(direction, up, new Cesium.Cartesian3()),
+							new Cesium.Cartesian3()
+						);
+						const offset = Cesium.Cartesian3.multiplyByScalar(right, roadWidth, new Cesium.Cartesian3());
+					frozenAreaCorners = [
+						start,
+						Cesium.Cartesian3.add(start, offset, new Cesium.Cartesian3()),
+						Cesium.Cartesian3.add(end, offset, new Cesium.Cartesian3()),
+						end
+					];
+						const lengthOffsets = createGridOffsets(segmentLength, GRID_SIZE_METERS);
+						const widthOffsets = createGridOffsets(roadWidth, GRID_SIZE_METERS);
+						const gridLineRequests = [];
+
+						// メッシュセルのGeoJSON生成 + 非表示ポリラインエンティティ作成
+						for (let lengthIndex = 0; lengthIndex < lengthOffsets.length - 1; lengthIndex += 1) {
+							for (let widthIndex = 0; widthIndex < widthOffsets.length - 1; widthIndex += 1) {
+								const meshId = `GRID_${String((lengthIndex * (widthOffsets.length - 1)) + widthIndex + 1).padStart(3, '0')}`;
+
+								const dist1 = lengthOffsets[lengthIndex];
+								const dist2 = lengthOffsets[lengthIndex + 1];
+								const width1 = widthOffsets[widthIndex];
+								const width2 = widthOffsets[widthIndex + 1];
+
+								const offset1 = Cesium.Cartesian3.multiplyByScalar(direction, dist1, new Cesium.Cartesian3());
+								const offset2 = Cesium.Cartesian3.multiplyByScalar(direction, dist2, new Cesium.Cartesian3());
+								const sideOffset1 = Cesium.Cartesian3.multiplyByScalar(right, width1, new Cesium.Cartesian3());
+								const sideOffset2 = Cesium.Cartesian3.multiplyByScalar(right, width2, new Cesium.Cartesian3());
+
+								const p1 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset1, new Cesium.Cartesian3()), sideOffset1, new Cesium.Cartesian3());
+								const p2 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset1, new Cesium.Cartesian3()), sideOffset2, new Cesium.Cartesian3());
+								const p3 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset2, new Cesium.Cartesian3()), sideOffset2, new Cesium.Cartesian3());
+								const p4 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset2, new Cesium.Cartesian3()), sideOffset1, new Cesium.Cartesian3());
+
+								addMeshFeature(meshId, lengthIndex, widthIndex, p1, p2, p3, p4);
+							}
+						}
+
+						// 長手方向の線
+						for (let index = 0; index < lengthOffsets.length; index += 1) {
+							const distanceAlong = lengthOffsets[index];
+							const alongOffset = Cesium.Cartesian3.multiplyByScalar(direction, distanceAlong, new Cesium.Cartesian3());
+							const lineStart = Cesium.Cartesian3.add(start, alongOffset, new Cesium.Cartesian3());
+							const lineEnd = Cesium.Cartesian3.add(lineStart, offset, new Cesium.Cartesian3());
+							const isOuter = index === 0 || index === lengthOffsets.length - 1;
+							gridLineRequests.push({
+								positionsPromise: sampleAndRaisePositions([lineStart, lineEnd]),
+								width: isOuter ? GRID_LINE_WIDTH_OUTER : GRID_LINE_WIDTH_INNER
+							});
+						}
+
+						// 幅方向の線
+						for (let index = 0; index < widthOffsets.length; index += 1) {
+							const distanceRight = widthOffsets[index];
+							const sideOffset = Cesium.Cartesian3.multiplyByScalar(right, distanceRight, new Cesium.Cartesian3());
+							const lineStart = Cesium.Cartesian3.add(start, sideOffset, new Cesium.Cartesian3());
+							const lineEnd = Cesium.Cartesian3.add(end, sideOffset, new Cesium.Cartesian3());
+							const isOuter = index === 0 || index === widthOffsets.length - 1;
+							gridLineRequests.push({
+								positionsPromise: sampleAndRaisePositions([lineStart, lineEnd]),
+								width: isOuter ? GRID_LINE_WIDTH_OUTER : GRID_LINE_WIDTH_INNER
+							});
+						}
+
+						const raisedGridLines = await Promise.all(
+							gridLineRequests.map((request) => request.positionsPromise)
+						);
+
+						const meshCellEntities = [];
+						const centerMarkerEntities = [];
+						let cellIndex = 0;
+
+						for (let lengthIndex = 0; lengthIndex < lengthOffsets.length - 1; lengthIndex += 1) {
+							for (let widthIndex = 0; widthIndex < widthOffsets.length - 1; widthIndex += 1) {
+								const meshId = `GRID_${String(cellIndex + 1).padStart(3, '0')}`;
+								const dist1 = lengthOffsets[lengthIndex];
+								const dist2 = lengthOffsets[lengthIndex + 1];
+								const width1 = widthOffsets[widthIndex];
+								const width2 = widthOffsets[widthIndex + 1];
+
+								const offset1 = Cesium.Cartesian3.multiplyByScalar(direction, dist1, new Cesium.Cartesian3());
+								const offset2 = Cesium.Cartesian3.multiplyByScalar(direction, dist2, new Cesium.Cartesian3());
+								const sideOffset1 = Cesium.Cartesian3.multiplyByScalar(right, width1, new Cesium.Cartesian3());
+								const sideOffset2 = Cesium.Cartesian3.multiplyByScalar(right, width2, new Cesium.Cartesian3());
+
+								const p1 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset1, new Cesium.Cartesian3()), sideOffset1, new Cesium.Cartesian3());
+								const p2 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset1, new Cesium.Cartesian3()), sideOffset2, new Cesium.Cartesian3());
+								const p3 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset2, new Cesium.Cartesian3()), sideOffset2, new Cesium.Cartesian3());
+								const p4 = Cesium.Cartesian3.add(Cesium.Cartesian3.add(start, offset2, new Cesium.Cartesian3()), sideOffset1, new Cesium.Cartesian3());
+
+								const raisedCellPositions = await sampleAndRaisePositions([p1, p2]);
+								const cellEntity = viewer.entities.add({
+									polyline: {
+										positions: raisedCellPositions,
+										width: 1,
+										material: Cesium.Color.TRANSPARENT,
+										clampToGround: true,
+										zIndex: 0
+									}
+								});
+								cellEntity.meshId = meshId;
+								meshCellEntities.push(cellEntity);
+
+								const centerPoint = calculateMeshCenter(p1, p2, p3, p4);
+								const raisedCenter = await sampleAndRaisePositions([centerPoint]);
+								const centerMarkerEntity = viewer.entities.add({
+									position: raisedCenter[0],
+									point: {
+										pixelSize: 6,
+										color: Cesium.Color.LIME,
+										outlineColor: Cesium.Color.BLACK,
+										outlineWidth: 1,
+										heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+										disableDepthTestDistance: Number.POSITIVE_INFINITY
+									}
+								});
+								centerMarkerEntity.meshId = meshId;
+								centerMarkerEntities.push(centerMarkerEntity);							centerMarkerEntityMap[meshId] = centerMarkerEntity;								cellIndex += 1;
+							}
+						}
+
+						gridEntities = raisedGridLines.map((linePositions, index) => viewer.entities.add({
+							polyline: {
+								positions: linePositions,
+								width: gridLineRequests[index].width,
+								material: Cesium.Color.BLACK,
+								depthFailMaterial: Cesium.Color.BLACK,
+								clampToGround: true,
+								zIndex: 1
+							}
+						}));
+
+						gridEntities = gridEntities.concat(meshCellEntities, centerMarkerEntities);
+						drawingLocked = true;
+						console.log(`GeoJSON created with ${geoJsonData.features.length} mesh features`);					buildMeshTable();
+					tablePanel.classList.add('active');					}
+				}
+			}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+			handlerDraw.setInputAction((movement) => {
+				if (drawingLocked || selectedPoints.length !== 1 || !previewLineEntity) {
+					return;
+				}
+
+				const cartesian = getClickedPosition(movement.endPosition);
+				if (Cesium.defined(cartesian)) {
+					previewLineEntity._previewEnd = cartesian;
+				}
+			}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+			shareUrlButton.addEventListener('click', async () => {
+				if (setResultRecords.length === 0) {
+					return;
+				}
+
+				try {
+					const geojson = exportSetAreasToGeoJSON();
+					const base64 = await compressToBase64(JSON.stringify(geojson));
+					const url = `${location.origin}${location.pathname}#${base64}`;
+					await navigator.clipboard.writeText(url);
+					shareUrlButton.textContent = 'コピー完了！';
+					setTimeout(() => { shareUrlButton.textContent = 'URLをコピー'; }, 2000);
+				} catch (error) {
+					console.error('URLのコピーに失敗しました:', error);
+				}
+			});
+
+			// グローバルにGeoJSONデータをエクスポートできるようにする
+			window.exportMeshGeoJSON = () => {
+				return JSON.stringify(geoJsonData, null, 2);
+			};
+
+			window.getMeshGeoJSON = () => {
+				return geoJsonData;
+			};
+
+			window.importSetAreasFromGeoJSON = async (data) => {
+				const importedRecords = parseSetAreasFromGeoJSON(data);
+				setResultEntities.forEach((entity) => viewer.entities.remove(entity));
+				setResultEntities = [];
+				setResultRecords = [];
+				for (const record of importedRecords) {
+					setResultRecords.push(record);
+					await renderSetArea(record);
+				}
+			};
+		}
+
+		async function compressToBase64(str) {
+			const bytes = new TextEncoder().encode(str);
+			const stream = new CompressionStream('deflate-raw');
+			const writer = stream.writable.getWriter();
+			writer.write(bytes);
+			writer.close();
+			const compressed = await new Response(stream.readable).arrayBuffer();
+			const uint8 = new Uint8Array(compressed);
+			let binary = '';
+			for (const b of uint8) {
+				binary += String.fromCharCode(b);
+			}
+
+			return btoa(binary);
+		}
+
+		async function decompressFromBase64(base64) {
+			const binary = atob(base64);
+			const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+			const stream = new DecompressionStream('deflate-raw');
+			const writer = stream.writable.getWriter();
+			writer.write(bytes);
+			writer.close();
+			return new Response(stream.readable).text();
+		}
+
+		async function restoreFromHash() {
+			const hash = location.hash.slice(1);
+			if (!hash || !window.importSetAreasFromGeoJSON) {
+				return;
+			}
+
+			try {
+				const json = await decompressFromBase64(hash);
+				const data = JSON.parse(json);
+				await window.importSetAreasFromGeoJSON(data);
+			} catch (error) {
+				console.error('URLからの復元に失敗しました:', error);
+			}
+		}
+
+		initializeViewer()
+			.then(restoreFromHash)
+			.catch((error) => {
+				console.error('Cesium Viewer の初期化に失敗しました:', error);
+			});
+	</script>
+</body>
+</html>
