@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Football Pitch</title>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Cesium.js"></script>
+    <style>
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #cesiumContainer {
+            width: 100%;
+            height: 100%;
+        }
+        #toolbar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        #createPitchBtn {
+            padding: 10px 20px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: bold;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            transition: background 0.2s;
+        }
+        #createPitchBtn:hover { background: #1976D2; }
+        #createPitchBtn.active { background: #f44336; }
+        #createPitchBtn.active:hover { background: #d32f2f; }
+        #clearBtn {
+            padding: 8px 16px;
+            background: #607D8B;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            transition: background 0.2s;
+        }
+        #clearBtn:hover { background: #455A64; }
+        #status {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.75);
+            color: #fff;
+            padding: 10px 22px;
+            border-radius: 6px;
+            font-size: 14px;
+            pointer-events: none;
+            display: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    <div id="toolbar">
+        <button id="createPitchBtn">ピッチ作成</button>
+        <button id="clearBtn">クリア</button>
+    </div>
+    <div id="status" id="status"></div>
+    <script>
+        Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
+
+        const viewer = new Cesium.Viewer("cesiumContainer", {
+            animation: false,
+            baseLayerPicker: false,
+            geocoder: true,
+            homeButton: true,
+            infoBox: false,
+            navigationHelpButton: false,
+            sceneModePicker: false,
+            timeline: false,
+            fullscreenButton: false,
+            terrain: Cesium.Terrain.fromWorldTerrain(),
+        });
+
+        viewer.scene.globe.enableLighting = true;
+        viewer.scene.globe.depthTestAgainstTerrain = false;
+        viewer.camera.setView({
+            destination: Cesium.Cartesian3.fromDegrees(136.0, 37.0, 1800000),
+            orientation: {
+                heading: Cesium.Math.toRadians(0),
+                pitch: Cesium.Math.toRadians(-55),
+                roll: 0,
+            },
+        });
+
+        // ─── Pitch dimensions (meters) ───────────────────────────────────────
+        const PITCH_L = 68;   // long side  (x-axis in local coords)
+        const PITCH_W = 50;   // short side (y-axis in local coords)
+
+        // Penalty area
+        const PA_DEPTH = 12;                            // from goal line along x
+        const PA_WIDTH = 29;                            // centered on y=25
+        const PA_Y0    = (PITCH_W - PA_WIDTH) / 2;     // = 10.5
+        const PA_Y1    = PA_Y0 + PA_WIDTH;              // = 39.5
+
+        // Goal area
+        const GA_DEPTH = 4;                             // from goal line along x
+        const GA_WIDTH = 13;                            // goal area width
+        const GA_Y0    = (PITCH_W - GA_WIDTH) / 2;     // = 16
+        const GA_Y1    = GA_Y0 + GA_WIDTH;              // = 34
+
+        // Goal mouth (for visual reference lines only – not a 3-D structure)
+        const GOAL_WIDTH = 5;
+        const GOAL_Y0    = (PITCH_W - GOAL_WIDTH) / 2; // = 21
+        const GOAL_Y1    = GOAL_Y0 + GOAL_WIDTH;        // = 29
+
+        // Spots & circles
+        const PEN_SPOT_X  = 8;   // penalty spot from goal line
+        const PEN_ARC_R   = 7;    // penalty arc radius
+        const CENTER_R    = 7;    // centre circle radius
+        const CORNER_R    = 1;    // corner arc radius
+
+        // Line width (Cesium pixels)
+        const LW = 2;
+        const LW_THICK = 3;
+
+        // Stripe count along long axis
+        const STRIPE_N = 8;
+
+        // ─── State ───────────────────────────────────────────────────────────
+        let clickMode  = false;
+        let clickCount = 0;
+        let points     = [];
+        let tempMarkers = [];
+        let pitchEntities = [];
+
+        const statusEl = document.getElementById("status");
+        const btn      = document.getElementById("createPitchBtn");
+        const clearBtn = document.getElementById("clearBtn");
+
+        // ─── UI helpers ──────────────────────────────────────────────────────
+        function setStatus(msg) {
+            if (msg) {
+                statusEl.textContent = msg;
+                statusEl.style.display = "block";
+            } else {
+                statusEl.style.display = "none";
+            }
+        }
+
+        function addTempMarker(pos) {
+            const e = viewer.entities.add({
+                position: pos,
+                point: {
+                    pixelSize: 10,
+                    color: Cesium.Color.YELLOW,
+                    outlineColor: Cesium.Color.BLACK,
+                    outlineWidth: 2,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                }
+            });
+            tempMarkers.push(e);
+        }
+
+        function clearTempMarkers() {
+            tempMarkers.forEach(e => viewer.entities.remove(e));
+            tempMarkers = [];
+        }
+
+        function cancelMode() {
+            clickMode  = false;
+            clickCount = 0;
+            points     = [];
+            clearTempMarkers();
+            btn.textContent = "ピッチ作成";
+            btn.classList.remove("active");
+            setStatus(null);
+            viewer.scene.screenSpaceCameraController.enableRotate    = true;
+            viewer.scene.screenSpaceCameraController.enableTranslate = true;
+            viewer.scene.screenSpaceCameraController.enableZoom      = true;
+        }
+
+        // ─── Button handlers ─────────────────────────────────────────────────
+        btn.addEventListener("click", () => {
+            if (clickMode) {
+                cancelMode();
+            } else {
+                clickMode  = true;
+                clickCount = 0;
+                points     = [];
+                btn.textContent = "キャンセル";
+                btn.classList.add("active");
+                setStatus("1点目をクリック（ピッチの角）");
+            }
+        });
+
+        clearBtn.addEventListener("click", () => {
+            cancelMode();
+            pitchEntities.forEach(e => viewer.entities.remove(e));
+            pitchEntities = [];
+        });
+
+        // ─── Click handler ───────────────────────────────────────────────────
+        viewer.screenSpaceEventHandler.setInputAction(click => {
+            if (!clickMode) return;
+
+            const ray = viewer.camera.getPickRay(click.position);
+            const pos = viewer.scene.globe.pick(ray, viewer.scene);
+            if (!pos) return;
+
+            clickCount++;
+            points.push(pos);
+            addTempMarker(pos);
+
+            if (clickCount === 1) {
+                setStatus("2点目をクリック（長辺の方向・端点）");
+            } else if (clickCount === 2) {
+                setStatus("3点目をクリック（短辺の方向）");
+            } else if (clickCount === 3) {
+                clearTempMarkers();
+                setStatus(null);
+                drawPitch(points[0], points[1], points[2]);
+                cancelMode();
+            }
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+        // ─── Coordinate helpers ──────────────────────────────────────────────
+        /**
+         * Build an orthonormal basis { U, V } in the tangent plane at p1.
+         *  U = direction from p1 → p2 (long axis)
+         *  V = perpendicular to U in tangent plane, on the side of p3
+         */
+        function buildBasis(p1, p2, p3) {
+            const diff = Cesium.Cartesian3.subtract(p2, p1, new Cesium.Cartesian3());
+            const U = Cesium.Cartesian3.normalize(diff, new Cesium.Cartesian3());
+
+            // Surface normal (up) at p1
+            const up = Cesium.Cartesian3.normalize(
+                Cesium.Cartesian3.clone(p1), new Cesium.Cartesian3()
+            );
+
+            // Perpendicular to U in the tangent plane: V = normalize(up × U)
+            let V = Cesium.Cartesian3.cross(up, U, new Cesium.Cartesian3());
+            Cesium.Cartesian3.normalize(V, V);
+
+            // Flip V if p3 is on the opposite side
+            const toP3 = Cesium.Cartesian3.subtract(p3, p1, new Cesium.Cartesian3());
+            if (Cesium.Cartesian3.dot(V, toP3) < 0) {
+                Cesium.Cartesian3.negate(V, V);
+            }
+
+            return { U, V, origin: p1 };
+        }
+
+        /**
+         * Convert local (x, y) → Cesium Cartesian3 world position.
+         *  x = distance along long axis (0…68)
+         *  y = distance along short axis (0…50)
+         */
+        function local2world(x, y, basis) {
+            const { U, V, origin } = basis;
+            const pt = Cesium.Cartesian3.clone(origin, new Cesium.Cartesian3());
+            Cesium.Cartesian3.add(pt,
+                Cesium.Cartesian3.multiplyByScalar(U, x, new Cesium.Cartesian3()), pt);
+            Cesium.Cartesian3.add(pt,
+                Cesium.Cartesian3.multiplyByScalar(V, y, new Cesium.Cartesian3()), pt);
+            return pt;
+        }
+
+        /** Generate world positions for a polyline of local (x,y) points. */
+        function localLine(localPts, basis) {
+            return localPts.map(([x, y]) => local2world(x, y, basis));
+        }
+
+        /** Approximate a circular arc as polyline positions (local coords). */
+        function arcPoints(cx, cy, r, a0, a1, steps, basis) {
+            const pts = [];
+            for (let i = 0; i <= steps; i++) {
+                const a = a0 + (a1 - a0) * i / steps;
+                pts.push(local2world(cx + r * Math.cos(a), cy + r * Math.sin(a), basis));
+            }
+            return pts;
+        }
+
+        /** Add a polyline entity clamped to ground. */
+        function addLine(positions, color, width) {
+            const e = viewer.entities.add({
+                polyline: {
+                    positions,
+                    width: width || LW,
+                    material: color || Cesium.Color.WHITE,
+                    clampToGround: true,
+                    classificationType: Cesium.ClassificationType.TERRAIN,
+                }
+            });
+            pitchEntities.push(e);
+            return e;
+        }
+
+        /** Add a filled polygon entity clamped to ground. */
+        function addPolygon(positions, color) {
+            const e = viewer.entities.add({
+                polygon: {
+                    hierarchy: new Cesium.PolygonHierarchy(positions),
+                    material: color,
+                    classificationType: Cesium.ClassificationType.TERRAIN,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                }
+            });
+            pitchEntities.push(e);
+            return e;
+        }
+
+        // ─── Draw pitch ──────────────────────────────────────────────────────
+        function drawPitch(p1, p2, p3) {
+            const basis = buildBasis(p1, p2, p3);
+
+            // ── Background: alternating green stripes ──
+            const stripeW = PITCH_L / STRIPE_N;
+            const darkGreen  = Cesium.Color.fromCssColorString("#3a7d2c").withAlpha(1);
+            const lightGreen = Cesium.Color.fromCssColorString("#4fa832").withAlpha(1);
+            for (let i = 0; i < STRIPE_N; i++) {
+                const x0 = i * stripeW;
+                const x1 = x0 + stripeW;
+                const col = (i % 2 === 0) ? darkGreen : lightGreen;
+                addPolygon([
+                    local2world(x0, 0,       basis),
+                    local2world(x1, 0,       basis),
+                    local2world(x1, PITCH_W, basis),
+                    local2world(x0, PITCH_W, basis),
+                ], col);
+            }
+
+            // ── Outer boundary ──
+            addLine([
+                local2world(0,       0,       basis),
+                local2world(PITCH_L, 0,       basis),
+                local2world(PITCH_L, PITCH_W, basis),
+                local2world(0,       PITCH_W, basis),
+                local2world(0,       0,       basis),
+            ], Cesium.Color.WHITE, LW_THICK);
+
+            // ── Centre line ──
+            addLine([
+                local2world(PITCH_L / 2, 0,       basis),
+                local2world(PITCH_L / 2, PITCH_W, basis),
+            ], Cesium.Color.WHITE, LW);
+
+            // ── Centre circle ──
+            addLine(
+                arcPoints(PITCH_L / 2, PITCH_W / 2, CENTER_R, 0, Math.PI * 2, 64, basis),
+                Cesium.Color.WHITE, LW
+            );
+
+            // ── Centre spot ──
+            addLine(
+                arcPoints(PITCH_L / 2, PITCH_W / 2, 0.4, 0, Math.PI * 2, 16, basis),
+                Cesium.Color.WHITE, 3
+            );
+
+            // ── Corner arcs ──
+            // bottom-left (0,0): arc from 0° to 90°
+            addLine(arcPoints(0,       0,       CORNER_R, 0,            Math.PI / 2,     12, basis), Cesium.Color.WHITE, LW);
+            // bottom-right (L,0): arc from 90° to 180°
+            addLine(arcPoints(PITCH_L, 0,       CORNER_R, Math.PI / 2,  Math.PI,         12, basis), Cesium.Color.WHITE, LW);
+            // top-right (L,W): arc from 180° to 270°
+            addLine(arcPoints(PITCH_L, PITCH_W, CORNER_R, Math.PI,      Math.PI * 3 / 2, 12, basis), Cesium.Color.WHITE, LW);
+            // top-left (0,W): arc from 270° to 360°
+            addLine(arcPoints(0,       PITCH_W, CORNER_R, Math.PI * 3 / 2, Math.PI * 2,  12, basis), Cesium.Color.WHITE, LW);
+
+            // ─── LEFT END ────────────────────────────────────────────────────
+
+            // Left penalty area
+            addLine(localLine([
+                [0,        PA_Y0],
+                [PA_DEPTH, PA_Y0],
+                [PA_DEPTH, PA_Y1],
+                [0,        PA_Y1],
+            ], basis), Cesium.Color.WHITE, LW);
+
+            // Left goal area
+            addLine(localLine([
+                [0,        GA_Y0],
+                [GA_DEPTH, GA_Y0],
+                [GA_DEPTH, GA_Y1],
+                [0,        GA_Y1],
+            ], basis), Cesium.Color.WHITE, LW);
+
+            // Left penalty spot
+            addLine(
+                arcPoints(PEN_SPOT_X, PITCH_W / 2, 0.4, 0, Math.PI * 2, 16, basis),
+                Cesium.Color.WHITE, 3
+            );
+
+            // Left penalty arc (part of circle outside penalty area, i.e. x > PA_DEPTH)
+            {
+                const dx   = PA_DEPTH - PEN_SPOT_X;      // = 1
+                const half = Math.acos(dx / PEN_ARC_R);  // half-angle of arc chord
+                addLine(
+                    arcPoints(PEN_SPOT_X, PITCH_W / 2, PEN_ARC_R, -half, half, 32, basis),
+                    Cesium.Color.WHITE, LW
+                );
+            }
+
+            // ─── RIGHT END ───────────────────────────────────────────────────
+            const RP = PITCH_L - PEN_SPOT_X;   // right penalty spot x = 57
+
+            // Right penalty area
+            addLine(localLine([
+                [PITCH_L,           PA_Y0],
+                [PITCH_L - PA_DEPTH, PA_Y0],
+                [PITCH_L - PA_DEPTH, PA_Y1],
+                [PITCH_L,           PA_Y1],
+            ], basis), Cesium.Color.WHITE, LW);
+
+            // Right goal area
+            addLine(localLine([
+                [PITCH_L,           GA_Y0],
+                [PITCH_L - GA_DEPTH, GA_Y0],
+                [PITCH_L - GA_DEPTH, GA_Y1],
+                [PITCH_L,           GA_Y1],
+            ], basis), Cesium.Color.WHITE, LW);
+
+            // Right penalty spot
+            addLine(
+                arcPoints(RP, PITCH_W / 2, 0.4, 0, Math.PI * 2, 16, basis),
+                Cesium.Color.WHITE, 3
+            );
+
+            // Right penalty arc (x < PITCH_L - PA_DEPTH)
+            {
+                const dx   = RP - (PITCH_L - PA_DEPTH); // = 1
+                const half = Math.acos(dx / PEN_ARC_R);
+                // Arc faces left (toward x < PITCH_L - PA_DEPTH), so angles around π
+                addLine(
+                    arcPoints(RP, PITCH_W / 2, PEN_ARC_R, Math.PI - half, Math.PI + half, 32, basis),
+                    Cesium.Color.WHITE, LW
+                );
+            }
+
+            // ── Fly to pitch ──
+            const center = local2world(PITCH_L / 2, PITCH_W / 2, basis);
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.add(
+                    center,
+                    Cesium.Cartesian3.multiplyByScalar(
+                        Cesium.Cartesian3.normalize(center, new Cesium.Cartesian3()),
+                        200,
+                        new Cesium.Cartesian3()
+                    ),
+                    new Cesium.Cartesian3()
+                ),
+                orientation: {
+                    heading: 0,
+                    pitch: Cesium.Math.toRadians(-60),
+                    roll: 0,
+                },
+                duration: 1.5,
+            });
+        }
+    </script>
+</body>
+</html>
