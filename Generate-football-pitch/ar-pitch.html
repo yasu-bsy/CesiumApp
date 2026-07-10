@@ -177,7 +177,7 @@
 
     <div id="bottomBar">
       <button id="permBtn" class="hidden">📐 センサー許可 (iOS)</button>
-      <button id="placeBtn">📷 開始</button>
+      <button id="placeBtn" class="hidden">📷 開始</button>
       <div id="reticleHint" class="hidden">地面をスキャン中…</div>
       <div class="rotRow hidden" id="rotRow">
         <button class="rotBtn" id="rotL">↺</button>
@@ -199,7 +199,13 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.163.0/build/three.min.js"></script>
   <script>
+  if (!window.THREE) {
+    document.getElementById('status').textContent = '3Dライブラリ読込に失敗しました。通信環境を確認して再読込してください。';
+    throw new Error('THREE is not loaded');
+  }
+
   // ─────────────────────────────────────────────
   //  Pitch dimensions (metres) – same as Cesium app
   // ─────────────────────────────────────────────
@@ -717,6 +723,7 @@
         startOverlayBtn.classList.remove('hidden');
         placeBtn.classList.add('hidden');
         startOverlayBtn.onclick = async () => {
+          document.getElementById('status').textContent = 'ARセッション開始中…';
           startOverlayBtn.classList.add('hidden');
           await startWebXR();
         };
@@ -729,6 +736,7 @@
     startOverlayBtn.classList.remove('hidden');
     placeBtn.classList.add('hidden');
     startOverlayBtn.onclick = async () => {
+      document.getElementById('status').textContent = 'カメラ許可を待機中…';
       startOverlayBtn.classList.add('hidden');
       await startFallback();
     };
