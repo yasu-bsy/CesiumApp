@@ -496,17 +496,38 @@
   let orientReady = false;
   const camEl = document.getElementById('cam');
 
+  function withTimeout(promise, ms, message) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
+    ]);
+  }
+
   async function startFallback() {
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = 'カメラを起動しています…';
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusEl.textContent = 'このブラウザはカメラAPIに対応していません';
+      return;
+    }
+
     // Start camera stream
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await withTimeout(navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
-      });
+      }), 12000, 'camera-timeout');
       camEl.srcObject = stream;
       camEl.style.display = 'block';
     } catch (e) {
-      document.getElementById('status').textContent = 'カメラの許可が必要です';
+      statusEl.textContent = 'カメラ起動に失敗: Safariのサイト設定でカメラを許可し、再度「開始」を押してください';
+      document.getElementById('placeBtn').textContent = '📷 再試行';
+      document.getElementById('placeBtn').classList.remove('hidden');
+      document.getElementById('placeBtn').onclick = async () => {
+        document.getElementById('placeBtn').classList.add('hidden');
+        await startFallback();
+      };
       return;
     }
 
@@ -675,7 +696,13 @@
       }
     }
     // Fallback
-    startFallback();
+    document.getElementById('status').textContent = 'iOSモード: まず開始ボタンを押してください';
+    document.getElementById('placeBtn').textContent = '📷 開始';
+    document.getElementById('placeBtn').classList.remove('hidden');
+    document.getElementById('placeBtn').onclick = async () => {
+      document.getElementById('placeBtn').classList.add('hidden');
+      await startFallback();
+    };
   })();
   </script>
 </body>
