@@ -25,6 +25,14 @@
     #ui {
       position: fixed; z-index: 10;
       width: 100%; height: 100%;
+      pointer-events: auto;
+    }
+
+    #status,
+    #legend,
+    #distBadge,
+    #reticleHint,
+    #rotLabel {
       pointer-events: none;
     }
 
@@ -552,10 +560,7 @@
       statusEl.textContent = 'カメラ起動に失敗: Safariのサイト設定でカメラを許可し、再度「開始」を押してください';
       startOverlayBtn.textContent = '📷 再試行';
       startOverlayBtn.classList.remove('hidden');
-      startOverlayBtn.onclick = async () => {
-        startOverlayBtn.classList.add('hidden');
-        await startFallback();
-      };
+      startMode = 'fallback';
       return;
     }
 
@@ -667,9 +672,41 @@
   // ─────────────────────────────────────────────
   const placeBtn = document.getElementById('placeBtn');
   const startOverlayBtn = document.getElementById('startOverlay');
+  const statusEl = document.getElementById('status');
+  let startMode = 'fallback'; // fallback | xr
+  let startBusy = false;
+
+  async function handleStartOverlayTap() {
+    if (startBusy) return;
+    startBusy = true;
+    startOverlayBtn.disabled = true;
+    startOverlayBtn.style.opacity = '0.7';
+
+    try {
+      if (startMode === 'xr') {
+        statusEl.textContent = 'ARセッション開始中…';
+        startOverlayBtn.classList.add('hidden');
+        await startWebXR();
+      } else {
+        statusEl.textContent = 'カメラ許可を待機中…';
+        startOverlayBtn.classList.add('hidden');
+        await startFallback();
+      }
+    } finally {
+      startBusy = false;
+      startOverlayBtn.disabled = false;
+      startOverlayBtn.style.opacity = '1';
+    }
+  }
+
+  startOverlayBtn.addEventListener('click', handleStartOverlayTap);
+  startOverlayBtn.addEventListener('touchend', (event) => {
+    event.preventDefault();
+    handleStartOverlayTap();
+  }, { passive: false });
 
   function updateUIAfterPlace() {
-    document.getElementById('status').textContent = '↺↻ で向きを調整 | ピッチを歩きながら各ピンを確認してください';
+    statusEl.textContent = '↺↻ で向きを調整 | ピッチを歩きながら各ピンを確認してください';
     placeBtn.classList.add('hidden');
     startOverlayBtn.classList.add('hidden');
     document.getElementById('reticleHint').classList.add('hidden');
@@ -679,7 +716,7 @@
 
   document.getElementById('resetBtn').addEventListener('click', () => {
     resetPitch();
-    document.getElementById('status').textContent = xrSession
+    statusEl.textContent = xrSession
       ? '地面をスキャンして、タップでピッチを配置'
       : '地面を向いてタップでピッチを配置';
     placeBtn.classList.remove('hidden');
@@ -718,28 +755,20 @@
     if (navigator.xr) {
       const supported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
       if (supported) {
-        document.getElementById('status').textContent = 'AR開始ボタンを押してください';
+        statusEl.textContent = 'AR開始ボタンを押してください';
         startOverlayBtn.textContent = '🚀 AR 開始';
         startOverlayBtn.classList.remove('hidden');
         placeBtn.classList.add('hidden');
-        startOverlayBtn.onclick = async () => {
-          document.getElementById('status').textContent = 'ARセッション開始中…';
-          startOverlayBtn.classList.add('hidden');
-          await startWebXR();
-        };
+        startMode = 'xr';
         return;
       }
     }
     // Fallback
-    document.getElementById('status').textContent = 'iOSモード: まず開始ボタンを押してください';
+    statusEl.textContent = 'iOSモード: まず開始ボタンを押してください';
     startOverlayBtn.textContent = '📷 開始';
     startOverlayBtn.classList.remove('hidden');
     placeBtn.classList.add('hidden');
-    startOverlayBtn.onclick = async () => {
-      document.getElementById('status').textContent = 'カメラ許可を待機中…';
-      startOverlayBtn.classList.add('hidden');
-      await startFallback();
-    };
+    startMode = 'fallback';
   })();
   </script>
 </body>
