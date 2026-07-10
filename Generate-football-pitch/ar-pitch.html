@@ -59,10 +59,30 @@
 
     /* Bottom controls */
     #bottomBar {
-      position: absolute; bottom: 28px; left: 0; right: 0;
+      position: absolute; bottom: calc(env(safe-area-inset-bottom) + 96px); left: 0; right: 0;
       display: flex; flex-direction: column; align-items: center; gap: 14px;
       padding-bottom: env(safe-area-inset-bottom);
     }
+
+    #startOverlay {
+      position: absolute;
+      left: 50%;
+      top: 58%;
+      transform: translate(-50%, -50%);
+      z-index: 30;
+      pointer-events: all;
+      padding: 16px 34px;
+      min-width: 190px;
+      background: #1976D2;
+      color: #fff;
+      border: none;
+      border-radius: 30px;
+      font-size: 18px;
+      font-weight: bold;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+      cursor: pointer;
+    }
+    #startOverlay:active { background: #1565C0; }
     .rotRow {
       display: flex; gap: 14px; align-items: center;
       pointer-events: all;
@@ -84,6 +104,7 @@
     #placeBtn {
       pointer-events: all;
       padding: 14px 32px;
+      min-width: 170px;
       background: #1976D2; color: #fff;
       border: none; border-radius: 30px;
       font-size: 16px; font-weight: bold;
@@ -151,11 +172,12 @@
       <button id="resetBtn">リセット</button>
     </div>
 
-    <div id="status">カメラを起動しています…</div>
+    <div id="status">開始ボタンを押してください</div>
+    <button id="startOverlay">📷 開始</button>
 
     <div id="bottomBar">
       <button id="permBtn" class="hidden">📐 センサー許可 (iOS)</button>
-      <button id="placeBtn" class="hidden">📍 ここにピッチを配置</button>
+      <button id="placeBtn">📷 開始</button>
       <div id="reticleHint" class="hidden">地面をスキャン中…</div>
       <div class="rotRow hidden" id="rotRow">
         <button class="rotBtn" id="rotL">↺</button>
@@ -522,10 +544,10 @@
       camEl.style.display = 'block';
     } catch (e) {
       statusEl.textContent = 'カメラ起動に失敗: Safariのサイト設定でカメラを許可し、再度「開始」を押してください';
-      document.getElementById('placeBtn').textContent = '📷 再試行';
-      document.getElementById('placeBtn').classList.remove('hidden');
-      document.getElementById('placeBtn').onclick = async () => {
-        document.getElementById('placeBtn').classList.add('hidden');
+      startOverlayBtn.textContent = '📷 再試行';
+      startOverlayBtn.classList.remove('hidden');
+      startOverlayBtn.onclick = async () => {
+        startOverlayBtn.classList.add('hidden');
         await startFallback();
       };
       return;
@@ -560,7 +582,7 @@
       }
     });
     document.getElementById('status').textContent = '地面を向いてタップでピッチを配置';
-    document.getElementById('placeBtn').classList.remove('hidden');
+    placeBtn.classList.remove('hidden');
   }
 
   // Euler order for device orientation: ZXY
@@ -637,9 +659,13 @@
   // ─────────────────────────────────────────────
   //  UI helpers
   // ─────────────────────────────────────────────
+  const placeBtn = document.getElementById('placeBtn');
+  const startOverlayBtn = document.getElementById('startOverlay');
+
   function updateUIAfterPlace() {
     document.getElementById('status').textContent = '↺↻ で向きを調整 | ピッチを歩きながら各ピンを確認してください';
-    document.getElementById('placeBtn').classList.add('hidden');
+    placeBtn.classList.add('hidden');
+    startOverlayBtn.classList.add('hidden');
     document.getElementById('reticleHint').classList.add('hidden');
     document.getElementById('rotRow').classList.remove('hidden');
     distBadge.style.display = 'block';
@@ -650,7 +676,8 @@
     document.getElementById('status').textContent = xrSession
       ? '地面をスキャンして、タップでピッチを配置'
       : '地面を向いてタップでピッチを配置';
-    document.getElementById('placeBtn').classList.remove('hidden');
+    placeBtn.classList.remove('hidden');
+    startOverlayBtn.classList.add('hidden');
     document.getElementById('rotRow').classList.add('hidden');
     distBadge.style.display = 'none';
   });
@@ -685,22 +712,24 @@
     if (navigator.xr) {
       const supported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
       if (supported) {
-        document.getElementById('status').textContent = 'AR を開始しています…';
-        document.getElementById('placeBtn').textContent = '🚀 AR 開始';
-        document.getElementById('placeBtn').classList.remove('hidden');
-        document.getElementById('placeBtn').addEventListener('click', async () => {
-          document.getElementById('placeBtn').classList.add('hidden');
+        document.getElementById('status').textContent = 'AR開始ボタンを押してください';
+        startOverlayBtn.textContent = '🚀 AR 開始';
+        startOverlayBtn.classList.remove('hidden');
+        placeBtn.classList.add('hidden');
+        startOverlayBtn.onclick = async () => {
+          startOverlayBtn.classList.add('hidden');
           await startWebXR();
-        }, { once: true });
+        };
         return;
       }
     }
     // Fallback
     document.getElementById('status').textContent = 'iOSモード: まず開始ボタンを押してください';
-    document.getElementById('placeBtn').textContent = '📷 開始';
-    document.getElementById('placeBtn').classList.remove('hidden');
-    document.getElementById('placeBtn').onclick = async () => {
-      document.getElementById('placeBtn').classList.add('hidden');
+    startOverlayBtn.textContent = '📷 開始';
+    startOverlayBtn.classList.remove('hidden');
+    placeBtn.classList.add('hidden');
+    startOverlayBtn.onclick = async () => {
+      startOverlayBtn.classList.add('hidden');
       await startFallback();
     };
   })();
