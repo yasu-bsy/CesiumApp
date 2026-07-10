@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Football Pitch AR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: sans-serif; }
+
+    #cam {
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      z-index: 0;
+    }
+
+    #threeCanvas {
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      z-index: 1;
+    }
+
+    /* ── UI overlay ── */
+    #ui {
+      position: fixed; z-index: 10;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+
+    /* Top bar */
+    #topBar {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+    }
+    #topBar h1 {
+      color: #fff; font-size: 15px; font-weight: bold;
+      text-shadow: 0 1px 3px #000;
+    }
+    #resetBtn {
+      pointer-events: all;
+      padding: 7px 14px;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.5);
+      color: #fff; border-radius: 20px; font-size: 13px; cursor: pointer;
+    }
+    #resetBtn:active { background: rgba(255,255,255,0.35); }
+
+    /* Status message */
+    #status {
+      position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.65);
+      color: #fff; font-size: 13px; padding: 8px 18px;
+      border-radius: 20px; white-space: nowrap;
+      text-align: center; max-width: 90vw; white-space: normal;
+    }
+
+    /* Bottom controls */
+    #bottomBar {
+      position: absolute; bottom: 28px; left: 0; right: 0;
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .rotRow {
+      display: flex; gap: 14px; align-items: center;
+      pointer-events: all;
+    }
+    .rotBtn {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.5);
+      color: #fff; font-size: 22px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rotBtn:active { background: rgba(255,255,255,0.4); }
+    #rotLabel {
+      color: rgba(255,255,255,0.75); font-size: 12px;
+      pointer-events: none;
+    }
+
+    /* Place button */
+    #placeBtn {
+      pointer-events: all;
+      padding: 14px 32px;
+      background: #1976D2; color: #fff;
+      border: none; border-radius: 30px;
+      font-size: 16px; font-weight: bold;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4); cursor: pointer;
+    }
+    #placeBtn:active { background: #1565C0; }
+    #placeBtn.hidden { display: none; }
+
+    /* Reticle label (WebXR) */
+    #reticleHint {
+      color: rgba(255,255,255,0.8); font-size: 12px;
+      text-align: center; pointer-events: none;
+    }
+
+    /* Legend */
+    #legend {
+      position: absolute; right: 12px; top: 50%;
+      transform: translateY(-50%);
+      background: rgba(0,0,0,0.6);
+      border-radius: 10px; padding: 10px 12px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .legendRow {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 11px; color: #fff;
+    }
+    .dot {
+      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+    }
+
+    /* iOS permission button */
+    #permBtn {
+      pointer-events: all;
+      padding: 14px 28px;
+      background: #FF9800; color: #fff;
+      border: none; border-radius: 30px;
+      font-size: 15px; font-weight: bold;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4); cursor: pointer;
+    }
+    #permBtn:active { background: #F57C00; }
+    #permBtn.hidden { display: none; }
+
+    /* Distance badge */
+    #distBadge {
+      position: absolute; bottom: 155px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.65); color: #FFD600;
+      font-size: 13px; padding: 6px 16px; border-radius: 16px;
+      pointer-events: none; display: none;
+    }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <!-- Camera background (non-WebXR) -->
+  <video id="cam" autoplay playsinline muted></video>
+
+  <!-- Three.js canvas -->
+  <canvas id="threeCanvas"></canvas>
+
+  <!-- UI -->
+  <div id="ui">
+    <div id="topBar">
+      <h1>⚽ Football Pitch AR</h1>
+      <button id="resetBtn">リセット</button>
+    </div>
+
+    <div id="status">カメラを起動しています…</div>
+
+    <div id="bottomBar">
+      <button id="permBtn" class="hidden">📐 センサー許可 (iOS)</button>
+      <button id="placeBtn" class="hidden">📍 ここにピッチを配置</button>
+      <div id="reticleHint" class="hidden">地面をスキャン中…</div>
+      <div class="rotRow hidden" id="rotRow">
+        <button class="rotBtn" id="rotL">↺</button>
+        <span id="rotLabel">ピッチを回転</span>
+        <button class="rotBtn" id="rotR">↻</button>
+      </div>
+    </div>
+
+    <div id="legend">
+      <div class="legendRow"><div class="dot" style="background:#f44336"></div>外周コーナー</div>
+      <div class="legendRow"><div class="dot" style="background:#29B6F6"></div>センターライン</div>
+      <div class="legendRow"><div class="dot" style="background:#FFD600"></div>ペナルティエリア</div>
+      <div class="legendRow"><div class="dot" style="background:#66BB6A"></div>ゴールエリア</div>
+      <div class="legendRow"><div class="dot" style="background:#EF5350"></div>ゴールポスト</div>
+      <div class="legendRow"><div class="dot" style="background:#FF9800"></div>ペナルティスポット</div>
+    </div>
+
+    <div id="distBadge"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.min.js"></script>
+  <script>
+  // ─────────────────────────────────────────────
+  //  Pitch dimensions (metres) – same as Cesium app
+  // ─────────────────────────────────────────────
+  const PL = 68, PW = 50;
+  const PA_D = 12, PA_W = 29;
+  const PA_Y0 = (PW - PA_W) / 2,  PA_Y1 = PA_Y0 + PA_W;   // 10.5 / 39.5
+  const GA_D = 4,  GA_W = 13;
+  const GA_Y0 = (PW - GA_W) / 2,  GA_Y1 = GA_Y0 + GA_W;   // 18.5 / 31.5
+  const GOAL_W = 7.32;
+  const GOAL_Y0 = (PW - GOAL_W) / 2, GOAL_Y1 = GOAL_Y0 + GOAL_W;
+  const PEN_X = 11;    // penalty spot from goal line
+  const CENTER_X = PL / 2, CENTER_Y = PW / 2;
+
+  // ─────────────────────────────────────────────
+  //  Key points  [localX, localZ, label, colorHex]
+  //  (Three.js Y=up, so pitch lies in XZ plane)
+  // ─────────────────────────────────────────────
+  const PITCH_POINTS = [
+    // Outer corners – red
+    [0,    0,    'A1 外周', 0xf44336],
+    [PL,   0,    'A2 外周', 0xf44336],
+    [PL,   PW,   'A3 外周', 0xf44336],
+    [0,    PW,   'A4 外周', 0xf44336],
+    // Centre line intersections – light blue
+    [PL/2, 0,    'C1 CL', 0x29B6F6],
+    [PL/2, PW,   'C2 CL', 0x29B6F6],
+    // Left penalty area – yellow
+    [0,       PA_Y0, 'LP1 PA', 0xFFD600],
+    [PA_D,    PA_Y0, 'LP2 PA', 0xFFD600],
+    [PA_D,    PA_Y1, 'LP3 PA', 0xFFD600],
+    [0,       PA_Y1, 'LP4 PA', 0xFFD600],
+    // Right penalty area – yellow
+    [PL,      PA_Y0, 'RP1 PA', 0xFFD600],
+    [PL-PA_D, PA_Y0, 'RP2 PA', 0xFFD600],
+    [PL-PA_D, PA_Y1, 'RP3 PA', 0xFFD600],
+    [PL,      PA_Y1, 'RP4 PA', 0xFFD600],
+    // Left goal area – green
+    [0,       GA_Y0, 'LG1 GA', 0x66BB6A],
+    [GA_D,    GA_Y0, 'LG2 GA', 0x66BB6A],
+    [GA_D,    GA_Y1, 'LG3 GA', 0x66BB6A],
+    [0,       GA_Y1, 'LG4 GA', 0x66BB6A],
+    // Right goal area – green
+    [PL,      GA_Y0, 'RG1 GA', 0x66BB6A],
+    [PL-GA_D, GA_Y0, 'RG2 GA', 0x66BB6A],
+    [PL-GA_D, GA_Y1, 'RG3 GA', 0x66BB6A],
+    [PL,      GA_Y1, 'RG4 GA', 0x66BB6A],
+    // Goal posts – bright red
+    [0,  GOAL_Y0, 'LGP1 ゴール', 0xEF5350],
+    [0,  GOAL_Y1, 'LGP2 ゴール', 0xEF5350],
+    [PL, GOAL_Y0, 'RGP1 ゴール', 0xEF5350],
+    [PL, GOAL_Y1, 'RGP2 ゴール', 0xEF5350],
+    // Penalty spots – orange
+    [PEN_X,    PW/2, 'L PEN', 0xFF9800],
+    [PL-PEN_X, PW/2, 'R PEN', 0xFF9800],
+    // Centre spot – white
+    [PL/2, PW/2, 'CENTER', 0xFFFFFF],
+  ];
+
+  // Arc helper (returns array of [x,z] pairs)
+  function arcPts(cx, cz, r, a0, a1, n) {
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + (a1 - a0) * i / n;
+      pts.push([cx + r * Math.cos(a), cz + r * Math.sin(a)]);
+    }
+    return pts;
+  }
+
+  const π = Math.PI;
+  const PITCH_LINES = [
+    // Outer boundary
+    [[0,0],[PL,0],[PL,PW],[0,PW],[0,0]],
+    // Centre line
+    [[PL/2,0],[PL/2,PW]],
+    // Centre circle (radius 9.15m)
+    arcPts(PL/2, PW/2, 9.15, 0, π*2, 64),
+    // Left PA
+    [[0,PA_Y0],[PA_D,PA_Y0],[PA_D,PA_Y1],[0,PA_Y1]],
+    // Right PA
+    [[PL,PA_Y0],[PL-PA_D,PA_Y0],[PL-PA_D,PA_Y1],[PL,PA_Y1]],
+    // Left GA
+    [[0,GA_Y0],[GA_D,GA_Y0],[GA_D,GA_Y1],[0,GA_Y1]],
+    // Right GA
+    [[PL,GA_Y0],[PL-GA_D,GA_Y0],[PL-GA_D,GA_Y1],[PL,GA_Y1]],
+    // Left penalty arc
+    (() => { const dx=PA_D-PEN_X, h=Math.acos(dx/9.15); return arcPts(PEN_X,PW/2,9.15,-h,h,32); })(),
+    // Right penalty arc
+    (() => { const dx=(PL-PEN_X)-(PL-PA_D), h=Math.acos(dx/9.15); return arcPts(PL-PEN_X,PW/2,9.15,π-h,π+h,32); })(),
+    // Corner arcs
+    arcPts(0,   0,   1, 0,     π/2,   12),
+    arcPts(PL,  0,   1, π/2,   π,     12),
+    arcPts(PL,  PW,  1, π,     π*3/2, 12),
+    arcPts(0,   PW,  1, π*3/2, π*2,   12),
+  ];
+
+  // ─────────────────────────────────────────────
+  //  Three.js setup
+  // ─────────────────────────────────────────────
+  const canvas = document.getElementById('threeCanvas');
+  const renderer = new THREE.WebGLRenderer({
+    canvas, alpha: true, antialias: true
+  });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 500);
+  camera.position.set(0, 1.5, 0);  // eye height 1.5 m
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+  dirLight.position.set(5, 10, 5);
+  scene.add(dirLight);
+
+  // ─────────────────────────────────────────────
+  //  Pitch group (placed into scene on tap)
+  // ─────────────────────────────────────────────
+  let pitchGroup = null;
+  let pitchPlaced = false;
+  let pitchRotation = 0;  // radians
+
+  function buildPitchGroup() {
+    const g = new THREE.Group();
+
+    // ── Green surface ──
+    const surfGeo = new THREE.PlaneGeometry(PL, PW);
+    const surfMat = new THREE.MeshLambertMaterial({ color: 0x3a7d2c, transparent: true, opacity: 0.55, side: THREE.DoubleSide });
+    const surf = new THREE.Mesh(surfGeo, surfMat);
+    surf.rotation.x = -π / 2;
+    surf.position.set(PL/2, 0.01, PW/2);
+    g.add(surf);
+
+    // ── Lines ──
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.75 });
+    PITCH_LINES.forEach(pts => {
+      const geo = new THREE.BufferGeometry();
+      const verts = [];
+      pts.forEach(([x, z]) => verts.push(x, 0.03, z));
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      g.add(new THREE.Line(geo, lineMat));
+    });
+
+    // ── Pin markers ──
+    PITCH_POINTS.forEach(([x, z, label, color]) => {
+      const pinH = 1.8, pinR = 0.12;
+      const cyl = new THREE.Mesh(
+        new THREE.CylinderGeometry(pinR, pinR * 0.6, pinH, 8),
+        new THREE.MeshLambertMaterial({ color })
+      );
+      cyl.position.set(x, pinH / 2, z);
+      g.add(cyl);
+
+      // Flat disc at base
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(0.35, 16),
+        new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+      );
+      disc.rotation.x = -π / 2;
+      disc.position.set(x, 0.02, z);
+      g.add(disc);
+
+      // Sprite label
+      const sprite = makeTextSprite(label, color);
+      sprite.position.set(x, pinH + 0.35, z);
+      g.add(sprite);
+    });
+
+    return g;
+  }
+
+  function makeTextSprite(text, color) {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 80;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    roundRect(ctx, 4, 4, 248, 72, 12);
+    ctx.fill();
+    // border
+    ctx.strokeStyle = '#' + color.toString(16).padStart(6, '0');
+    ctx.lineWidth = 4;
+    roundRect(ctx, 4, 4, 248, 72, 12);
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 128, 40);
+
+    const tex = new THREE.CanvasTexture(c);
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(2.0, 0.65, 1);
+    return sprite;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function placePitch(worldX, worldZ, rotY) {
+    if (pitchGroup) scene.remove(pitchGroup);
+    pitchGroup = buildPitchGroup();
+    // Centre the group on pitch midpoint
+    pitchGroup.position.set(worldX - (PL/2), 0, worldZ - (PW/2));
+    pitchGroup.rotation.y = rotY;
+    scene.add(pitchGroup);
+    pitchPlaced = true;
+  }
+
+  function resetPitch() {
+    if (pitchGroup) { scene.remove(pitchGroup); pitchGroup = null; }
+    pitchPlaced = false;
+    pitchRotation = 0;
+  }
+
+  // ─────────────────────────────────────────────
+  //  WebXR path
+  // ─────────────────────────────────────────────
+  let xrSession = null, xrHitTestSource = null, xrRefSpace = null;
+  let reticle = null;
+  let reticleVisible = false;
+
+  function buildReticle() {
+    const r = new THREE.Group();
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.12, 0.18, 32),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -π / 2;
+    r.add(ring);
+    r.visible = false;
+    scene.add(r);
+    return r;
+  }
+
+  async function startWebXR() {
+    try {
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay'],
+        domOverlay: { root: document.getElementById('ui') }
+      });
+      xrSession = session;
+      renderer.xr.setReferenceSpaceType('local');
+      await renderer.xr.setSession(session);
+
+      xrRefSpace = await session.requestReferenceSpace('viewer');
+      xrHitTestSource = await session.requestHitTestSource({ space: xrRefSpace });
+
+      reticle = buildReticle();
+
+      document.getElementById('status').textContent = '地面をスキャンして、タップでピッチを配置';
+      document.getElementById('reticleHint').classList.remove('hidden');
+      document.getElementById('cam').style.display = 'none';
+
+      session.addEventListener('end', () => { xrSession = null; xrHitTestSource = null; });
+
+      renderer.setAnimationLoop(xrRenderLoop);
+
+      // Tap to place in WebXR
+      session.addEventListener('select', () => {
+        if (reticleVisible) {
+          const pos = new THREE.Vector3();
+          reticle.getWorldPosition(pos);
+          pitchRotation += 0;
+          placePitch(pos.x, pos.z, pitchRotation);
+          updateUIAfterPlace();
+        }
+      });
+    } catch (e) {
+      console.warn('WebXR failed:', e);
+      startFallback();
+    }
+  }
+
+  function xrRenderLoop(timestamp, frame) {
+    if (!frame) return;
+    const hitResults = frame.getHitTestResults(xrHitTestSource);
+    if (hitResults.length > 0) {
+      const pose = hitResults[0].getPose(renderer.xr.getReferenceSpace());
+      if (pose) {
+        reticle.visible = true;
+        reticleVisible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+        reticle.matrix.decompose(reticle.position, reticle.quaternion, reticle.scale);
+      }
+    } else {
+      reticle.visible = false;
+      reticleVisible = false;
+    }
+    renderer.render(scene, camera);
+  }
+
+  // ─────────────────────────────────────────────
+  //  iOS / fallback path  (camera + DeviceOrientation)
+  // ─────────────────────────────────────────────
+  let orientAlpha = 0, orientBeta = 90, orientGamma = 0;
+  let orientReady = false;
+  const camEl = document.getElementById('cam');
+
+  async function startFallback() {
+    // Start camera stream
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      camEl.srcObject = stream;
+      camEl.style.display = 'block';
+    } catch (e) {
+      document.getElementById('status').textContent = 'カメラの許可が必要です';
+      return;
+    }
+
+    // iOS requires user gesture to request DeviceOrientationEvent permission
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+      document.getElementById('permBtn').classList.remove('hidden');
+      document.getElementById('status').textContent = 'センサー許可ボタンを押してください';
+      document.getElementById('permBtn').addEventListener('click', async () => {
+        const res = await DeviceOrientationEvent.requestPermission();
+        if (res === 'granted') {
+          document.getElementById('permBtn').classList.add('hidden');
+          enableOrientation();
+        }
+      }, { once: true });
+    } else {
+      enableOrientation();
+    }
+
+    renderer.setAnimationLoop(fallbackRenderLoop);
+  }
+
+  function enableOrientation() {
+    window.addEventListener('deviceorientation', (e) => {
+      if (e.alpha !== null) {
+        orientAlpha = e.alpha;
+        orientBeta  = e.beta;
+        orientGamma = e.gamma;
+        orientReady = true;
+      }
+    });
+    document.getElementById('status').textContent = '地面を向いてタップでピッチを配置';
+    document.getElementById('placeBtn').classList.remove('hidden');
+  }
+
+  // Euler order for device orientation: ZXY
+  const _euler = new THREE.Euler();
+  const _q0 = new THREE.Quaternion();
+  const _q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2); // -90° around X
+  const _screenQ = new THREE.Quaternion();
+
+  function applyDeviceOrientation() {
+    if (!orientReady) return;
+    const alpha = THREE.MathUtils.degToRad(orientAlpha);
+    const beta  = THREE.MathUtils.degToRad(orientBeta);
+    const gamma = THREE.MathUtils.degToRad(orientGamma);
+    _euler.set(beta, alpha, -gamma, 'YXZ');
+    camera.quaternion.setFromEuler(_euler);
+    camera.quaternion.multiply(_q1);  // adjust for camera pointing along -Z
+  }
+
+  const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const _raycaster = new THREE.Raycaster();
+  const _ndc = new THREE.Vector2(0, 0); // screen centre
+
+  function placeFromCamera() {
+    // Raycast from screen centre downward into ground plane
+    _raycaster.setFromCamera(_ndc, camera);
+    const hit = new THREE.Vector3();
+    const ok = _raycaster.ray.intersectPlane(_groundPlane, hit);
+    if (ok) {
+      placePitch(hit.x, hit.z, pitchRotation);
+      updateUIAfterPlace();
+    } else {
+      // Fallback: place 10m in front of camera at ground level
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      const t = (0 - camera.position.y) / dir.y;
+      if (t > 0) {
+        const gp = camera.position.clone().addScaledVector(dir, t);
+        placePitch(gp.x, gp.z, pitchRotation);
+        updateUIAfterPlace();
+      }
+    }
+  }
+
+  function fallbackRenderLoop() {
+    applyDeviceOrientation();
+    renderer.render(scene, camera);
+    updateDistanceBadge();
+  }
+
+  // ─────────────────────────────────────────────
+  //  Nearest pin distance badge
+  // ─────────────────────────────────────────────
+  const distBadge = document.getElementById('distBadge');
+
+  function updateDistanceBadge() {
+    if (!pitchGroup) return;
+    // Camera position projected to ground
+    const cam2d = new THREE.Vector2(camera.position.x, camera.position.z);
+    let minD = Infinity, minLabel = '';
+    PITCH_POINTS.forEach(([lx, lz, label]) => {
+      // Transform local pitch point to world
+      const worldVec = new THREE.Vector3(lx, 0, lz);
+      pitchGroup.localToWorld(worldVec);
+      const d = cam2d.distanceTo(new THREE.Vector2(worldVec.x, worldVec.z));
+      if (d < minD) { minD = d; minLabel = label; }
+    });
+    if (minD < 50) {
+      distBadge.style.display = 'block';
+      distBadge.textContent = `最寄ピン: ${minLabel} — ${minD.toFixed(1)} m`;
+    } else {
+      distBadge.style.display = 'none';
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  //  UI helpers
+  // ─────────────────────────────────────────────
+  function updateUIAfterPlace() {
+    document.getElementById('status').textContent = '↺↻ で向きを調整 | ピッチを歩きながら各ピンを確認してください';
+    document.getElementById('placeBtn').classList.add('hidden');
+    document.getElementById('reticleHint').classList.add('hidden');
+    document.getElementById('rotRow').classList.remove('hidden');
+    distBadge.style.display = 'block';
+  }
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    resetPitch();
+    document.getElementById('status').textContent = xrSession
+      ? '地面をスキャンして、タップでピッチを配置'
+      : '地面を向いてタップでピッチを配置';
+    document.getElementById('placeBtn').classList.remove('hidden');
+    document.getElementById('rotRow').classList.add('hidden');
+    distBadge.style.display = 'none';
+  });
+
+  document.getElementById('placeBtn').addEventListener('click', () => {
+    placeFromCamera();
+  });
+
+  const ROT_STEP = THREE.MathUtils.degToRad(5);
+  document.getElementById('rotL').addEventListener('click', () => {
+    pitchRotation += ROT_STEP;
+    if (pitchGroup) pitchGroup.rotation.y = pitchRotation;
+  });
+  document.getElementById('rotR').addEventListener('click', () => {
+    pitchRotation -= ROT_STEP;
+    if (pitchGroup) pitchGroup.rotation.y = pitchRotation;
+  });
+
+  // Touch tap (fallback) - also trigger place on single tap when not placed
+  let touchStartTime = 0;
+  canvas.addEventListener('touchstart', e => { touchStartTime = Date.now(); }, { passive: true });
+  canvas.addEventListener('touchend', e => {
+    if (Date.now() - touchStartTime < 250 && e.changedTouches.length === 1) {
+      if (!pitchPlaced && orientReady) placeFromCamera();
+    }
+  }, { passive: true });
+
+  // ─────────────────────────────────────────────
+  //  Boot
+  // ─────────────────────────────────────────────
+  (async () => {
+    if (navigator.xr) {
+      const supported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
+      if (supported) {
+        document.getElementById('status').textContent = 'AR を開始しています…';
+        document.getElementById('placeBtn').textContent = '🚀 AR 開始';
+        document.getElementById('placeBtn').classList.remove('hidden');
+        document.getElementById('placeBtn').addEventListener('click', async () => {
+          document.getElementById('placeBtn').classList.add('hidden');
+          await startWebXR();
+        }, { once: true });
+        return;
+      }
+    }
+    // Fallback
+    startFallback();
+  })();
+  </script>
+</body>
+</html>
