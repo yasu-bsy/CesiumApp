@@ -126,6 +126,11 @@
 		<label for="pointSizeRange">点群サイズ</label>
 		<input id="pointSizeRange" type="range" min="1" max="15" step="0.5" value="5">
 		<span id="pointSizeValue">5.0 px</span>
+		<div class="inputGroup">
+			<label for="sectionThicknessRange">断面厚さ</label>
+			<input id="sectionThicknessRange" type="range" min="50" max="300" step="10" value="200">
+			<span id="sectionThicknessValue">200 mm</span>
+		</div>
 	</div>
 	<div id="clipModal" aria-hidden="true">
 		<div id="clipModalDialog" role="dialog" aria-modal="true" aria-label="矩形内点群ビュー">
@@ -145,6 +150,8 @@
 		const roadWidthInput = document.getElementById("roadWidthInput");
 		const pointSizeRange = document.getElementById("pointSizeRange");
 		const pointSizeValue = document.getElementById("pointSizeValue");
+		const sectionThicknessRange = document.getElementById("sectionThicknessRange");
+		const sectionThicknessValue = document.getElementById("sectionThicknessValue");
 		const clipModal = document.getElementById("clipModal");
 		const clipModalDialog = document.getElementById("clipModalDialog");
 		const clipModalHeader = document.getElementById("clipModalHeader");
@@ -163,6 +170,8 @@
 		let finalizedSegmentEntity = null;
 		let finalizedAreaEntity = null;
 		let finalizedRectangleEntity = null;
+		const DEFAULT_SECTION_THICKNESS_MM = 200;
+		let currentSectionThicknessMm = DEFAULT_SECTION_THICKNESS_MM;
 
 		const interactionHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
@@ -195,6 +204,14 @@
 				return 3;
 			}
 			return value;
+		}
+
+		function getSectionThicknessMm() {
+			return currentSectionThicknessMm;
+		}
+
+		function getSectionThicknessMeters() {
+			return getSectionThicknessMm() / 1000;
 		}
 
 		function getWorldPosition(screenPosition) {
@@ -298,7 +315,7 @@
 
 			const unitRight = Cesium.Cartesian3.normalize(right, new Cesium.Cartesian3());
 			const roadWidth = getRoadWidthMeters();
-			const alongLength = 0.2;
+			const alongLength = getSectionThicknessMeters();
 			const height = 1.0;
 
 			const halfRoadWidthOffset = Cesium.Cartesian3.multiplyByScalar(unitRight, roadWidth * 0.5, new Cesium.Cartesian3());
@@ -332,18 +349,24 @@
 				return;
 			}
 
+			const sectionThicknessMm = getSectionThicknessMm();
+
 			const payload = {
 				center: cartesianToArray(rectangleConfig.position),
 				dimensions: cartesianToArray(rectangleConfig.dimensions),
 				axisX: cartesianToArray(rectangleConfig.axisX),
 				axisY: cartesianToArray(rectangleConfig.axisY),
 				axisZ: cartesianToArray(rectangleConfig.axisZ),
-				pointSize: Number(pointSizeRange.value) || 5
+				pointSize: Number(pointSizeRange.value) || 5,
+				sectionThicknessMm: Number.isFinite(sectionThicknessMm) ? sectionThicknessMm : 200,
+				sectionThicknessM: (Number.isFinite(sectionThicknessMm) ? sectionThicknessMm : 200) / 1000
 			};
 
 			const params = new URLSearchParams();
 			params.set("rect", JSON.stringify(payload));
+			params.set("_ts", Date.now().toString());
 			clipModalDialog.style.transform = "translate(calc(-50% + " + modalDragOffsetX + "px), calc(-50% + " + modalDragOffsetY + "px))";
+			clipModalFrame.removeAttribute("src");
 			clipModalFrame.src = "./clip-view.html?" + params.toString();
 			clipModal.classList.add("open");
 			clipModal.setAttribute("aria-hidden", "false");
@@ -507,6 +530,19 @@
 		pointSizeRange.addEventListener("input", function() {
 			applyPointSize(this.value);
 		});
+
+		function applySectionThicknessDisplay(valueMm) {
+			const numericValue = Number(valueMm);
+			currentSectionThicknessMm = Number.isFinite(numericValue) ? Cesium.Math.clamp(numericValue, 50, 300) : DEFAULT_SECTION_THICKNESS_MM;
+			sectionThicknessRange.value = currentSectionThicknessMm.toFixed(0);
+			sectionThicknessValue.textContent = currentSectionThicknessMm.toFixed(0) + " mm";
+		}
+
+		sectionThicknessRange.addEventListener("input", function() {
+			applySectionThicknessDisplay(this.value);
+		});
+
+		applySectionThicknessDisplay(DEFAULT_SECTION_THICKNESS_MM);
 
 		async function main() {
 			try {

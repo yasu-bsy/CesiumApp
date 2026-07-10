@@ -38,6 +38,8 @@
 	<div id="clipViewer"></div>
 	<div id="hud">
 		<div>矩形内の点群のみ表示中</div>
+		<div id="sectionThicknessApplied">断面厚さ: -- mm</div>
+		<button id="resetViewBtn" type="button">初期視野に戻す</button>
 		<button id="invertBtn" type="button">内外を反転</button>
 		<button id="deformBtn" type="button">デフォルメ OFF</button>
 		<button id="measureBtn" type="button">距離計測 OFF</button>
@@ -69,10 +71,17 @@
 		let measureStartPoint = null;
 		let measureSecondPoint = null;
 		let measureThirdPoint = null;
+		let measureHoverPoint = null;
 		let measurePointEntities = [];
 		let measureLineEntity = null;
 		let measurePerpendicularEntity = null;
 		let measureLabelEntity = null;
+		let activeMeasureTileset = null;
+		let activeRectConfig = null;
+		let clipInverted = false;
+		let clipDeformed = false;
+		let clipDeformMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
+		let clipDeformInverseMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
 
 		function parseRectanglePayload() {
 			const params = new URLSearchParams(window.location.search);
@@ -92,15 +101,57 @@
 			return new Cesium.Cartesian3(values[0], values[1], values[2]);
 		}
 
+		function normalizeRectConfig(config) {
+			if (!config || !Array.isArray(config.dimensions) || config.dimensions.length !== 3) {
+				return config;
+			}
+
+			const explicitThicknessM = Number(config.sectionThicknessM);
+			if (Number.isFinite(explicitThicknessM) && explicitThicknessM >= 0.05 && explicitThicknessM <= 0.3) {
+				config.dimensions[1] = explicitThicknessM;
+				return config;
+			}
+
+			const explicitThicknessMm = Number(config.sectionThicknessMm);
+			if (Number.isFinite(explicitThicknessMm) && explicitThicknessMm >= 50 && explicitThicknessMm <= 300) {
+				config.dimensions[1] = explicitThicknessMm / 1000;
+				return config;
+			}
+
+			const legacyThicknessCm = Number(config.sectionThicknessCm);
+			if (Number.isFinite(legacyThicknessCm) && legacyThicknessCm >= 5 && legacyThicknessCm <= 30) {
+				config.dimensions[1] = legacyThicknessCm / 100;
+			}
+
+			return config;
+		}
+
+		function updateSectionThicknessHud(config) {
+			const hud = document.getElementById("sectionThicknessApplied");
+			if (!hud || !config || !Array.isArray(config.dimensions) || config.dimensions.length !== 3) {
+				return;
+			}
+			const explicitThicknessM = Number(config.sectionThicknessM);
+			const appliedMm = Number.isFinite(explicitThicknessM) ? explicitThicknessM * 1000 : config.dimensions[1] * 1000;
+			hud.textContent = "断面厚さ: " + appliedMm.toFixed(1) + " mm";
+		}
+
 		function getPopupWorldPosition(screenPosition) {
 			if (!screenPosition) {
 				return null;
 			}
 
+			if (activeMeasureTileset) {
+				const picked = viewer.scene.pick(screenPosition);
+				if (!isPickFromActiveTileset(picked)) {
+					return null;
+				}
+			}
+
 			if (viewer.scene.pickPositionSupported) {
 				const pickedPosition = viewer.scene.pickPosition(screenPosition);
 				if (Cesium.defined(pickedPosition)) {
-					return pickedPosition;
+					return isPointVisibleForMeasurement(pickedPosition) ? pickedPosition : null;
 				}
 			}
 
@@ -111,10 +162,62 @@
 
 			const globePick = viewer.scene.globe.pick(ray, viewer.scene);
 			if (globePick) {
-				return globePick;
+				return isPointVisibleForMeasurement(globePick) ? globePick : null;
 			}
 
-			return viewer.camera.pickEllipsoid(screenPosition, viewer.scene.globe.ellipsoid);
+			const ellipsoidPick = viewer.camera.pickEllipsoid(screenPosition, viewer.scene.globe.ellipsoid);
+			return isPointVisibleForMeasurement(ellipsoidPick) ? ellipsoidPick : null;
+		}
+
+		function isPickFromActiveTileset(picked) {
+			if (!picked || !activeMeasureTileset) {
+				return false;
+			}
+
+			if (picked.primitive === activeMeasureTileset || picked.tileset === activeMeasureTileset) {
+				return true;
+			}
+
+			if (picked.content && picked.content.tileset === activeMeasureTileset) {
+				return true;
+			}
+
+			return false;
+		}
+
+		function isPointVisibleForMeasurement(worldPoint) {
+			if (!worldPoint) {
+				return false;
+			}
+			if (!activeRectConfig) {
+				return true;
+			}
+
+			const center = vecFromArray(activeRectConfig.center);
+			const dimensions = vecFromArray(activeRectConfig.dimensions);
+			const axisX = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisX), new Cesium.Cartesian3());
+			const axisY = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisY), new Cesium.Cartesian3());
+			const axisZ = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisZ), new Cesium.Cartesian3());
+
+			let pointForTest = worldPoint;
+			if (clipDeformed) {
+				pointForTest = Cesium.Matrix4.multiplyByPoint(
+					clipDeformInverseMatrix,
+					worldPoint,
+					new Cesium.Cartesian3()
+				);
+			}
+
+			const delta = Cesium.Cartesian3.subtract(pointForTest, center, new Cesium.Cartesian3());
+			const localX = Cesium.Cartesian3.dot(delta, axisX);
+			const localY = Cesium.Cartesian3.dot(delta, axisY);
+			const localZ = Cesium.Cartesian3.dot(delta, axisZ);
+
+			const inside = Math.abs(localX) <= dimensions.x * 0.5 &&
+				Math.abs(localY) <= dimensions.y * 0.5 &&
+				Math.abs(localZ) <= dimensions.z * 0.5;
+
+			return clipInverted ? !inside : inside;
 		}
 
 		function midpointCartesian(a, b) {
@@ -125,11 +228,7 @@
 			document.getElementById("measureStatus").textContent = text;
 		}
 
-		function clearMeasurementEntities() {
-			measurePointEntities.forEach(function(entity) {
-				viewer.entities.remove(entity);
-			});
-			measurePointEntities = [];
+		function clearMeasurementGraphics() {
 			if (measureLineEntity) {
 				viewer.entities.remove(measureLineEntity);
 				measureLineEntity = null;
@@ -144,10 +243,19 @@
 			}
 		}
 
+		function clearMeasurementEntities() {
+			measurePointEntities.forEach(function(entity) {
+				viewer.entities.remove(entity);
+			});
+			measurePointEntities = [];
+			clearMeasurementGraphics();
+		}
+
 		function resetMeasurementState(preserveStatus) {
 			measureStartPoint = null;
 			measureSecondPoint = null;
 			measureThirdPoint = null;
+			measureHoverPoint = null;
 			clearMeasurementEntities();
 			if (!preserveStatus) {
 				updateMeasureStatus(measureEnabled ? "1点目をクリックしてください" : "3点で垂線距離を測定します");
@@ -184,32 +292,111 @@
 			);
 		}
 
+		function toMeasurementSpace(worldPoint) {
+			if (!worldPoint) {
+				return null;
+			}
+			if (!clipDeformed) {
+				return Cesium.Cartesian3.clone(worldPoint, new Cesium.Cartesian3());
+			}
+			return Cesium.Matrix4.multiplyByPoint(
+				clipDeformInverseMatrix,
+				worldPoint,
+				new Cesium.Cartesian3()
+			);
+		}
+
+		function fromMeasurementSpace(measurementPoint) {
+			if (!measurementPoint) {
+				return null;
+			}
+			if (!clipDeformed) {
+				return Cesium.Cartesian3.clone(measurementPoint, new Cesium.Cartesian3());
+			}
+			return Cesium.Matrix4.multiplyByPoint(
+				clipDeformMatrix,
+				measurementPoint,
+				new Cesium.Cartesian3()
+			);
+		}
+
+		function projectPointToSectionPlane(measurementPoint) {
+			if (!measurementPoint || !activeRectConfig) {
+				return measurementPoint ? Cesium.Cartesian3.clone(measurementPoint, new Cesium.Cartesian3()) : null;
+			}
+
+			const center = vecFromArray(activeRectConfig.center);
+			const axisY = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisY), new Cesium.Cartesian3());
+			const delta = Cesium.Cartesian3.subtract(measurementPoint, center, new Cesium.Cartesian3());
+			const offsetAlongAxis = Cesium.Cartesian3.dot(delta, axisY);
+			const alongComponent = Cesium.Cartesian3.multiplyByScalar(axisY, offsetAlongAxis, new Cesium.Cartesian3());
+			return Cesium.Cartesian3.subtract(measurementPoint, alongComponent, new Cesium.Cartesian3());
+		}
+
+		function getProjectedMeasurementPoint(worldPoint) {
+			const measurementPoint = toMeasurementSpace(worldPoint);
+			return projectPointToSectionPlane(measurementPoint);
+		}
+
 		function renderMeasurement() {
-			if (!measureStartPoint || !measureSecondPoint || !measureThirdPoint) {
+			clearMeasurementGraphics();
+
+			if (!measureStartPoint) {
 				return;
 			}
 
-			const footPoint = projectPointOntoLine(measureThirdPoint, measureStartPoint, measureSecondPoint);
-			if (!footPoint) {
-				updateMeasureStatus("1点目と2点目は離して選択してください");
+			const activeSecondPoint = measureSecondPoint || measureHoverPoint;
+			if (!activeSecondPoint) {
+				viewer.scene.requestRender();
 				return;
 			}
 
-			const distanceMeters = Cesium.Cartesian3.distance(measureThirdPoint, footPoint);
-			const labelPosition = midpointCartesian(measureThirdPoint, footPoint);
+			const measureStart = getProjectedMeasurementPoint(measureStartPoint);
+			const measureSecond = getProjectedMeasurementPoint(activeSecondPoint);
+			if (!measureStart || !measureSecond) {
+				return;
+			}
+			const displayStart = fromMeasurementSpace(measureStart);
+			const displaySecond = fromMeasurementSpace(measureSecond);
 
 			measureLineEntity = viewer.entities.add({
 				polyline: {
-					positions: [measureStartPoint, measureSecondPoint],
+					positions: [displayStart, displaySecond],
 					width: 3,
 					material: Cesium.Color.CYAN,
 					clampToGround: false
 				}
 			});
 
+			if (!measureSecondPoint) {
+				viewer.scene.requestRender();
+				return;
+			}
+
+			const activeThirdPoint = measureThirdPoint || measureHoverPoint;
+			if (!activeThirdPoint) {
+				viewer.scene.requestRender();
+				return;
+			}
+
+			const measureThird = getProjectedMeasurementPoint(activeThirdPoint);
+			if (!measureThird) {
+				return;
+			}
+			const measureFootPoint = projectPointOntoLine(measureThird, measureStart, measureSecond);
+			if (!measureFootPoint) {
+				updateMeasureStatus("1点目と2点目は離して選択してください");
+				return;
+			}
+
+			const distanceMeters = Cesium.Cartesian3.distance(measureThird, measureFootPoint);
+			const distanceMillimeters = distanceMeters * 1000.0;
+			const displayThird = fromMeasurementSpace(measureThird);
+			const displayFootPoint = fromMeasurementSpace(measureFootPoint);
+
 			measurePerpendicularEntity = viewer.entities.add({
 				polyline: {
-					positions: [measureThirdPoint, footPoint],
+					positions: [displayThird, displayFootPoint],
 					width: 3,
 					material: Cesium.Color.LIME,
 					clampToGround: false
@@ -217,19 +404,19 @@
 			});
 
 			measureLabelEntity = viewer.entities.add({
-				position: labelPosition,
+				position: displayThird,
 				label: {
-					text: distanceMeters.toFixed(3) + " m",
+					text: distanceMillimeters.toFixed(1) + " mm",
 					font: "16px Segoe UI",
 					fillColor: Cesium.Color.WHITE,
 					showBackground: true,
 					backgroundColor: Cesium.Color.BLACK.withAlpha(0.7),
-					pixelOffset: new Cesium.Cartesian2(0, -16),
+					pixelOffset: new Cesium.Cartesian2(0, 20),
 					heightReference: Cesium.HeightReference.NONE
 				}
 			});
 
-			updateMeasureStatus("垂線距離: " + distanceMeters.toFixed(3) + " m");
+			updateMeasureStatus((measureThirdPoint ? "垂線距離(中央断面投影): " : "プレビュー距離(中央断面投影): ") + distanceMillimeters.toFixed(1) + " mm");
 			viewer.scene.requestRender();
 		}
 
@@ -256,6 +443,7 @@
 				if (!measureStartPoint || (measureStartPoint && measureSecondPoint && measureThirdPoint)) {
 					resetMeasurementState(true);
 					measureStartPoint = worldPosition;
+					measureHoverPoint = null;
 					addMeasurePoint(measureStartPoint, Cesium.Color.YELLOW);
 					updateMeasureStatus("2点目をクリックしてください");
 					viewer.scene.requestRender();
@@ -264,16 +452,28 @@
 
 				if (!measureSecondPoint) {
 					measureSecondPoint = worldPosition;
+					measureHoverPoint = null;
 					addMeasurePoint(measureSecondPoint, Cesium.Color.ORANGE);
 					updateMeasureStatus("3点目をクリックしてください");
+					renderMeasurement();
 					viewer.scene.requestRender();
 					return;
 				}
 
 				measureThirdPoint = worldPosition;
+				measureHoverPoint = null;
 				addMeasurePoint(measureThirdPoint, Cesium.Color.LIME);
 				renderMeasurement();
 			}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+			popupHandler.setInputAction(function(movement) {
+				if (!measureEnabled || !measureStartPoint) {
+					return;
+				}
+
+				measureHoverPoint = getPopupWorldPosition(movement.endPosition);
+				renderMeasurement();
+			}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 		}
 
 		function buildBoxModelMatrix(config) {
@@ -312,9 +512,13 @@
 
 		function buildClippingPlanes(config, clipInsideBox) {
 			const dimensions = vecFromArray(config.dimensions);
+			const explicitThicknessM = Number(config.sectionThicknessM);
+			const sectionThicknessM = Number.isFinite(explicitThicknessM)
+				? Cesium.Math.clamp(explicitThicknessM, 0.05, 0.3)
+				: dimensions.y;
 
 			const hx = dimensions.x * 0.5;
-			const hy = dimensions.y * 0.5;
+			const hy = sectionThicknessM * 0.5;
 			const hz = dimensions.z * 0.5;
 
 			const insideHalfSpaces = [
@@ -406,19 +610,16 @@
 
 			const maxDim = Math.max(dimensions.x, dimensions.y, dimensions.z);
 			const backDistance = Math.max(maxDim * 8.0, 8.0);
-			const upDistance = Math.max(dimensions.z * 1.2, 1.0);
 
 			const backOffset = Cesium.Cartesian3.multiplyByScalar(axisForward, -backDistance, new Cesium.Cartesian3());
-			const upOffset = Cesium.Cartesian3.multiplyByScalar(axisUp, upDistance, new Cesium.Cartesian3());
 			const cameraPosition = Cesium.Cartesian3.add(center, backOffset, new Cesium.Cartesian3());
-			Cesium.Cartesian3.add(cameraPosition, upOffset, cameraPosition);
 
 			const direction = Cesium.Cartesian3.subtract(center, cameraPosition, new Cesium.Cartesian3());
 			Cesium.Cartesian3.normalize(direction, direction);
 
 			const orthoFrustum = new Cesium.OrthographicFrustum();
 			orthoFrustum.aspectRatio = Math.max(viewer.scene.canvas.clientWidth / Math.max(viewer.scene.canvas.clientHeight, 1), 0.1);
-			const baseWidth = Math.max(dimensions.x, dimensions.z) * 2.4;
+			const baseWidth = Math.max(dimensions.x, dimensions.z) * 1.8;
 			minOrthoWidth = Math.max(Math.max(dimensions.x, dimensions.z) * 0.6, 0.5);
 			maxOrthoWidth = Math.max(baseWidth * 30.0, 100.0);
 			orthoFrustum.width = baseWidth;
@@ -436,6 +637,13 @@
 			});
 		}
 
+		function resetInitialView() {
+			if (!activeRectConfig) {
+				return;
+			}
+			focusAlongSegmentAxis(activeRectConfig);
+		}
+
 		function configureOrthographicZoom() {
 			viewer.scene.screenSpaceCameraController.enableZoom = false;
 			popupHandler.setInputAction(function(movement) {
@@ -451,14 +659,17 @@
 		}
 
 		async function main() {
-			const rectConfig = parseRectanglePayload();
+			const rectConfig = normalizeRectConfig(parseRectanglePayload());
 			if (!rectConfig) {
 				alert("矩形パラメータが見つかりませんでした。");
 				return;
 			}
+			updateSectionThicknessHud(rectConfig);
+			activeRectConfig = rectConfig;
 
 			const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(4880598);
 			viewer.scene.primitives.add(tileset);
+			activeMeasureTileset = tileset;
 			if (Cesium.defined(tileset.readyPromise)) {
 				await tileset.readyPromise;
 			}
@@ -473,6 +684,7 @@
 
 			let inverted = false;
 			let deformed = false;
+			let currentDeformMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
 			function applyClipping() {
 				const clippingConfig = buildClippingPlanes(rectConfig, inverted);
 				const clippingModelMatrix = buildClippingModelMatrixForTileset(rectConfig, tileset, baseModelMatrix);
@@ -487,20 +699,38 @@
 			}
 
 			function applyVisualMode() {
+				if (deformed) {
+					const widthScale = Number.isFinite(Number(rectConfig.deformWidthScale)) ? Number(rectConfig.deformWidthScale) : 0.45;
+					const alongScale = Number.isFinite(Number(rectConfig.deformAlongScale)) ? Number(rectConfig.deformAlongScale) : 1.0;
+					const heightScale = Number.isFinite(Number(rectConfig.deformHeightScale)) ? Number(rectConfig.deformHeightScale) : 2.2;
+					currentDeformMatrix = buildDeformMatrix(rectConfig, widthScale, alongScale, heightScale);
+				} else {
+					currentDeformMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
+				}
+
 				applyDeformation(tileset, baseModelMatrix, rectConfig, deformed);
+				clipInverted = inverted;
+				clipDeformed = deformed;
+				clipDeformMatrix = Cesium.Matrix4.clone(currentDeformMatrix, new Cesium.Matrix4());
+				clipDeformInverseMatrix = Cesium.Matrix4.inverse(currentDeformMatrix, new Cesium.Matrix4());
 				applyClipping();
+				renderMeasurement();
 			}
 
 			applyVisualMode();
 
 			document.getElementById("invertBtn").addEventListener("click", function() {
 				inverted = !inverted;
+				clipInverted = inverted;
 				applyClipping();
 			});
 			document.getElementById("deformBtn").addEventListener("click", function() {
 				deformed = !deformed;
 				this.textContent = deformed ? "デフォルメ ON" : "デフォルメ OFF";
 				applyVisualMode();
+			});
+			document.getElementById("resetViewBtn").addEventListener("click", function() {
+				resetInitialView();
 			});
 
 			const center = vecFromArray(rectConfig.center);
@@ -526,7 +756,7 @@
 				}
 			});
 
-			focusAlongSegmentAxis(rectConfig);
+			resetInitialView();
 			configureOrthographicZoom();
 			configureMeasurementMode();
 		}
