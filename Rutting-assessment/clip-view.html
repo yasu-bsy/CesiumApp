@@ -41,7 +41,7 @@
 		<button id="invertBtn" type="button">内外を反転</button>
 		<button id="deformBtn" type="button">デフォルメ OFF</button>
 		<button id="measureBtn" type="button">距離計測 OFF</button>
-		<div id="measureStatus">2点を選択してください</div>
+		<div id="measureStatus">3点で垂線距離を測定します</div>
 	</div>
 
 	<script>
@@ -67,9 +67,11 @@
 		let maxOrthoWidth = 100.0;
 		let measureEnabled = false;
 		let measureStartPoint = null;
-		let measureEndPoint = null;
+		let measureSecondPoint = null;
+		let measureThirdPoint = null;
 		let measurePointEntities = [];
 		let measureLineEntity = null;
+		let measurePerpendicularEntity = null;
 		let measureLabelEntity = null;
 
 		function parseRectanglePayload() {
@@ -132,6 +134,10 @@
 				viewer.entities.remove(measureLineEntity);
 				measureLineEntity = null;
 			}
+			if (measurePerpendicularEntity) {
+				viewer.entities.remove(measurePerpendicularEntity);
+				measurePerpendicularEntity = null;
+			}
 			if (measureLabelEntity) {
 				viewer.entities.remove(measureLabelEntity);
 				measureLabelEntity = null;
@@ -140,10 +146,11 @@
 
 		function resetMeasurementState(preserveStatus) {
 			measureStartPoint = null;
-			measureEndPoint = null;
+			measureSecondPoint = null;
+			measureThirdPoint = null;
 			clearMeasurementEntities();
 			if (!preserveStatus) {
-				updateMeasureStatus(measureEnabled ? "1点目をクリックしてください" : "2点を選択してください");
+				updateMeasureStatus(measureEnabled ? "1点目をクリックしてください" : "3点で垂線距離を測定します");
 			}
 		}
 
@@ -160,17 +167,49 @@
 			measurePointEntities.push(entity);
 		}
 
+		function projectPointOntoLine(point, lineStart, lineEnd) {
+			const lineVector = Cesium.Cartesian3.subtract(lineEnd, lineStart, new Cesium.Cartesian3());
+			const pointVector = Cesium.Cartesian3.subtract(point, lineStart, new Cesium.Cartesian3());
+			const lineLengthSquared = Cesium.Cartesian3.magnitudeSquared(lineVector);
+			if (lineLengthSquared < 0.000001) {
+				return null;
+			}
+
+			const t = Cesium.Cartesian3.dot(pointVector, lineVector) / lineLengthSquared;
+			const clampedT = Cesium.Math.clamp(t, 0.0, 1.0);
+			return Cesium.Cartesian3.add(
+				lineStart,
+				Cesium.Cartesian3.multiplyByScalar(lineVector, clampedT, new Cesium.Cartesian3()),
+				new Cesium.Cartesian3()
+			);
+		}
+
 		function renderMeasurement() {
-			if (!measureStartPoint || !measureEndPoint) {
+			if (!measureStartPoint || !measureSecondPoint || !measureThirdPoint) {
 				return;
 			}
 
-			const distanceMeters = Cesium.Cartesian3.distance(measureStartPoint, measureEndPoint);
-			const labelPosition = midpointCartesian(measureStartPoint, measureEndPoint);
+			const footPoint = projectPointOntoLine(measureThirdPoint, measureStartPoint, measureSecondPoint);
+			if (!footPoint) {
+				updateMeasureStatus("1点目と2点目は離して選択してください");
+				return;
+			}
+
+			const distanceMeters = Cesium.Cartesian3.distance(measureThirdPoint, footPoint);
+			const labelPosition = midpointCartesian(measureThirdPoint, footPoint);
 
 			measureLineEntity = viewer.entities.add({
 				polyline: {
-					positions: [measureStartPoint, measureEndPoint],
+					positions: [measureStartPoint, measureSecondPoint],
+					width: 3,
+					material: Cesium.Color.CYAN,
+					clampToGround: false
+				}
+			});
+
+			measurePerpendicularEntity = viewer.entities.add({
+				polyline: {
+					positions: [measureThirdPoint, footPoint],
 					width: 3,
 					material: Cesium.Color.LIME,
 					clampToGround: false
@@ -190,7 +229,7 @@
 				}
 			});
 
-			updateMeasureStatus("距離: " + distanceMeters.toFixed(3) + " m");
+			updateMeasureStatus("垂線距離: " + distanceMeters.toFixed(3) + " m");
 			viewer.scene.requestRender();
 		}
 
@@ -214,7 +253,7 @@
 					return;
 				}
 
-				if (!measureStartPoint || (measureStartPoint && measureEndPoint)) {
+				if (!measureStartPoint || (measureStartPoint && measureSecondPoint && measureThirdPoint)) {
 					resetMeasurementState(true);
 					measureStartPoint = worldPosition;
 					addMeasurePoint(measureStartPoint, Cesium.Color.YELLOW);
@@ -223,8 +262,16 @@
 					return;
 				}
 
-				measureEndPoint = worldPosition;
-				addMeasurePoint(measureEndPoint, Cesium.Color.ORANGE);
+				if (!measureSecondPoint) {
+					measureSecondPoint = worldPosition;
+					addMeasurePoint(measureSecondPoint, Cesium.Color.ORANGE);
+					updateMeasureStatus("3点目をクリックしてください");
+					viewer.scene.requestRender();
+					return;
+				}
+
+				measureThirdPoint = worldPosition;
+				addMeasurePoint(measureThirdPoint, Cesium.Color.LIME);
 				renderMeasurement();
 			}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 		}
