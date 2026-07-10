@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Rutting Assessment - Minimal Cesium</title>
+	<link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+	<script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+	<style>
+		html, body, #cesiumContainer {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			padding: 0;
+			overflow: hidden;
+		}
+		#pointSizePanel {
+			position: absolute;
+			top: 16px;
+			left: 16px;
+			z-index: 100;
+			background: rgba(255, 255, 255, 0.95);
+			border-radius: 8px;
+			padding: 12px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+			font-family: "Segoe UI", sans-serif;
+			min-width: 220px;
+		}
+		#pointSizePanel label {
+			display: block;
+			font-size: 13px;
+			font-weight: 600;
+			margin-bottom: 6px;
+		}
+		.inputGroup {
+			margin-top: 10px;
+		}
+		.inputGroup input[type="number"] {
+			width: 100%;
+			box-sizing: border-box;
+			padding: 6px 8px;
+			border: 1px solid #bdbdbd;
+			border-radius: 4px;
+			font-size: 13px;
+		}
+		#pointSizeRange {
+			width: 100%;
+		}
+		#pointSizeValue {
+			display: inline-block;
+			margin-top: 6px;
+			font-size: 13px;
+			font-weight: 600;
+		}
+		#clipModal {
+			position: fixed;
+			inset: 0;
+			z-index: 300;
+			display: none;
+			background: transparent;
+		}
+		#clipModal.open {
+			display: block;
+		}
+		#clipModalDialog {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			width: min(46vw, 660px);
+			height: min(43vh, 420px);
+			min-width: 420px;
+			min-height: 300px;
+			max-width: 92vw;
+			max-height: 86vh;
+			background: #0b1119;
+			border-radius: 10px;
+			overflow: hidden;
+			box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+			border: 1px solid rgba(255, 255, 255, 0.15);
+			display: flex;
+			flex-direction: column;
+			resize: both;
+		}
+		#clipModalHeader {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 8px;
+			padding: 10px 12px;
+			background: rgba(255, 255, 255, 0.06);
+			border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+			color: #d9e8ff;
+			font-family: "Segoe UI", sans-serif;
+			font-size: 13px;
+			cursor: move;
+			user-select: none;
+		}
+		#clipModalClose {
+			padding: 6px 10px;
+			border: 1px solid rgba(255, 255, 255, 0.25);
+			background: rgba(0, 0, 0, 0.4);
+			color: #fff;
+			border-radius: 6px;
+			cursor: pointer;
+		}
+		#clipModalFrame {
+			width: 100%;
+			height: calc(100% - 45px);
+			border: 0;
+			background: #000;
+		}
+	</style>
+</head>
+<body>
+	<div id="cesiumContainer"></div>
+	<div id="pointSizePanel">
+		<div class="inputGroup">
+			<label for="inspectionLengthInput">検査区間長さ (m)</label>
+			<input id="inspectionLengthInput" type="number" min="0" step="0.1" value="20">
+		</div>
+		<div class="inputGroup">
+			<label for="roadWidthInput">道路幅 (m)</label>
+			<input id="roadWidthInput" type="number" min="0" step="0.1" value="3">
+		</div>
+		<label for="pointSizeRange">点群サイズ</label>
+		<input id="pointSizeRange" type="range" min="1" max="15" step="0.5" value="5">
+		<span id="pointSizeValue">5.0 px</span>
+	</div>
+	<div id="clipModal" aria-hidden="true">
+		<div id="clipModalDialog" role="dialog" aria-modal="true" aria-label="矩形内点群ビュー">
+			<div id="clipModalHeader">
+				<span>矩形内点群ビュー</span>
+				<button id="clipModalClose" type="button">閉じる</button>
+			</div>
+			<iframe id="clipModalFrame" title="矩形内点群ビュー"></iframe>
+		</div>
+	</div>
+
+	<script>
+		Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
+
+		const viewer = new Cesium.Viewer("cesiumContainer");
+		const inspectionLengthInput = document.getElementById("inspectionLengthInput");
+		const roadWidthInput = document.getElementById("roadWidthInput");
+		const pointSizeRange = document.getElementById("pointSizeRange");
+		const pointSizeValue = document.getElementById("pointSizeValue");
+		const clipModal = document.getElementById("clipModal");
+		const clipModalDialog = document.getElementById("clipModalDialog");
+		const clipModalHeader = document.getElementById("clipModalHeader");
+		const clipModalClose = document.getElementById("clipModalClose");
+		const clipModalFrame = document.getElementById("clipModalFrame");
+		let modalDragOffsetX = 0;
+		let modalDragOffsetY = 0;
+		let isDraggingModal = false;
+		let dragStartX = 0;
+		let dragStartY = 0;
+		let dragOriginOffsetX = 0;
+		let dragOriginOffsetY = 0;
+		let pointCloudTileset = null;
+		let startPoint = null;
+		let hoverPoint = null;
+		let finalizedSegmentEntity = null;
+		let finalizedAreaEntity = null;
+		let finalizedRectangleEntity = null;
+
+		const interactionHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+
+		const previewSegmentEntity = viewer.entities.add({
+			polyline: {
+				positions: new Cesium.CallbackProperty(function() {
+					const segment = buildFixedLengthSegment(startPoint, hoverPoint);
+					return segment ? segment : [];
+				}, false),
+				width: 4,
+				material: Cesium.Color.CYAN,
+				clampToGround: false,
+				show: new Cesium.CallbackProperty(function() {
+					return !!buildFixedLengthSegment(startPoint, hoverPoint);
+				}, false)
+			}
+		});
+
+		function getInspectionLengthMeters() {
+			const value = Number(inspectionLengthInput.value);
+			if (!Number.isFinite(value) || value <= 0) {
+				return 20;
+			}
+			return value;
+		}
+
+		function getRoadWidthMeters() {
+			const value = Number(roadWidthInput.value);
+			if (!Number.isFinite(value) || value <= 0) {
+				return 3;
+			}
+			return value;
+		}
+
+		function getWorldPosition(screenPosition) {
+			if (!screenPosition) {
+				return null;
+			}
+
+			if (viewer.scene.pickPositionSupported) {
+				const pickedPosition = viewer.scene.pickPosition(screenPosition);
+				if (Cesium.defined(pickedPosition)) {
+					return pickedPosition;
+				}
+			}
+
+			const ray = viewer.camera.getPickRay(screenPosition);
+			if (!ray) {
+				return null;
+			}
+
+			const globePick = viewer.scene.globe.pick(ray, viewer.scene);
+			if (globePick) {
+				return globePick;
+			}
+
+			return viewer.camera.pickEllipsoid(screenPosition, viewer.scene.globe.ellipsoid);
+		}
+
+		function buildFixedLengthSegment(start, toward) {
+			if (!start || !toward) {
+				return null;
+			}
+
+			const direction = Cesium.Cartesian3.subtract(toward, start, new Cesium.Cartesian3());
+			const directionLength = Cesium.Cartesian3.magnitude(direction);
+			if (directionLength < 0.001) {
+				return null;
+			}
+
+			const unitDirection = Cesium.Cartesian3.normalize(direction, new Cesium.Cartesian3());
+			const fixedLength = getInspectionLengthMeters();
+			const scaledDirection = Cesium.Cartesian3.multiplyByScalar(unitDirection, fixedLength, new Cesium.Cartesian3());
+			const end = Cesium.Cartesian3.add(start, scaledDirection, new Cesium.Cartesian3());
+			return [start, end];
+		}
+
+		function buildRightSideArea(segmentPositions) {
+			if (!segmentPositions || segmentPositions.length !== 2) {
+				return null;
+			}
+
+			const start = segmentPositions[0];
+			const end = segmentPositions[1];
+			const segmentVector = Cesium.Cartesian3.subtract(end, start, new Cesium.Cartesian3());
+			const segmentLength = Cesium.Cartesian3.magnitude(segmentVector);
+			if (segmentLength < 0.001) {
+				return null;
+			}
+
+			const unitDirection = Cesium.Cartesian3.normalize(segmentVector, new Cesium.Cartesian3());
+			const midpoint = Cesium.Cartesian3.midpoint(start, end, new Cesium.Cartesian3());
+			const up = viewer.scene.globe.ellipsoid.geodeticSurfaceNormal(midpoint, new Cesium.Cartesian3());
+			const right = Cesium.Cartesian3.cross(unitDirection, up, new Cesium.Cartesian3());
+			const rightLength = Cesium.Cartesian3.magnitude(right);
+			if (rightLength < 0.000001) {
+				return null;
+			}
+
+			const unitRight = Cesium.Cartesian3.normalize(right, new Cesium.Cartesian3());
+			const roadWidth = getRoadWidthMeters();
+			const rightOffset = Cesium.Cartesian3.multiplyByScalar(unitRight, roadWidth, new Cesium.Cartesian3());
+
+			const startRight = Cesium.Cartesian3.add(start, rightOffset, new Cesium.Cartesian3());
+			const endRight = Cesium.Cartesian3.add(end, rightOffset, new Cesium.Cartesian3());
+
+			return {
+				hierarchy: new Cesium.PolygonHierarchy([start, end, endRight, startRight])
+			};
+		}
+
+		function buildCenterRightRectangle(segmentPositions) {
+			if (!segmentPositions || segmentPositions.length !== 2) {
+				return null;
+			}
+
+			const start = segmentPositions[0];
+			const end = segmentPositions[1];
+			const segmentVector = Cesium.Cartesian3.subtract(end, start, new Cesium.Cartesian3());
+			const segmentLength = Cesium.Cartesian3.magnitude(segmentVector);
+			if (segmentLength < 0.001) {
+				return null;
+			}
+
+			const unitDirection = Cesium.Cartesian3.normalize(segmentVector, new Cesium.Cartesian3());
+			const midpoint = Cesium.Cartesian3.midpoint(start, end, new Cesium.Cartesian3());
+			const up = viewer.scene.globe.ellipsoid.geodeticSurfaceNormal(midpoint, new Cesium.Cartesian3());
+			const right = Cesium.Cartesian3.cross(unitDirection, up, new Cesium.Cartesian3());
+			const rightLength = Cesium.Cartesian3.magnitude(right);
+			if (rightLength < 0.000001) {
+				return null;
+			}
+
+			const unitRight = Cesium.Cartesian3.normalize(right, new Cesium.Cartesian3());
+			const roadWidth = getRoadWidthMeters();
+			const alongLength = 0.2;
+			const height = 1.0;
+
+			const halfRoadWidthOffset = Cesium.Cartesian3.multiplyByScalar(unitRight, roadWidth * 0.5, new Cesium.Cartesian3());
+			const boxCenter = Cesium.Cartesian3.add(midpoint, halfRoadWidthOffset, new Cesium.Cartesian3());
+
+			const enuFrame = Cesium.Transforms.eastNorthUpToFixedFrame(midpoint);
+			const inverseEnuFrame = Cesium.Matrix4.inverse(enuFrame, new Cesium.Matrix4());
+			const localDirection = Cesium.Matrix4.multiplyByPointAsVector(inverseEnuFrame, unitDirection, new Cesium.Cartesian3());
+			const heading = Math.atan2(localDirection.x, localDirection.y);
+			const orientation = Cesium.Transforms.headingPitchRollQuaternion(
+				boxCenter,
+				new Cesium.HeadingPitchRoll(heading, 0.0, 0.0)
+			);
+
+			return {
+				position: boxCenter,
+				orientation: orientation,
+				dimensions: new Cesium.Cartesian3(roadWidth, alongLength, height),
+				axisX: unitRight,
+				axisY: unitDirection,
+				axisZ: up
+			};
+		}
+
+		function cartesianToArray(cartesian) {
+			return [cartesian.x, cartesian.y, cartesian.z];
+		}
+
+		function openClippedWindow(rectangleConfig) {
+			if (!rectangleConfig) {
+				return;
+			}
+
+			const payload = {
+				center: cartesianToArray(rectangleConfig.position),
+				dimensions: cartesianToArray(rectangleConfig.dimensions),
+				axisX: cartesianToArray(rectangleConfig.axisX),
+				axisY: cartesianToArray(rectangleConfig.axisY),
+				axisZ: cartesianToArray(rectangleConfig.axisZ),
+				pointSize: Number(pointSizeRange.value) || 5
+			};
+
+			const params = new URLSearchParams();
+			params.set("rect", JSON.stringify(payload));
+			clipModalDialog.style.transform = "translate(calc(-50% + " + modalDragOffsetX + "px), calc(-50% + " + modalDragOffsetY + "px))";
+			clipModalFrame.src = "./clip-view.html?" + params.toString();
+			clipModal.classList.add("open");
+			clipModal.setAttribute("aria-hidden", "false");
+		}
+
+		function closeClipModal() {
+			clipModal.classList.remove("open");
+			clipModal.setAttribute("aria-hidden", "true");
+			clipModalFrame.removeAttribute("src");
+		}
+
+		function clampModalOffset(offsetX, offsetY) {
+			const rect = clipModalDialog.getBoundingClientRect();
+			const halfFreeX = Math.max((window.innerWidth - rect.width) * 0.5 - 8, 0);
+			const halfFreeY = Math.max((window.innerHeight - rect.height) * 0.5 - 8, 0);
+			return {
+				x: Math.min(Math.max(offsetX, -halfFreeX), halfFreeX),
+				y: Math.min(Math.max(offsetY, -halfFreeY), halfFreeY)
+			};
+		}
+
+		function applyModalTransform() {
+			clipModalDialog.style.transform = "translate(calc(-50% + " + modalDragOffsetX + "px), calc(-50% + " + modalDragOffsetY + "px))";
+		}
+
+		clipModalClose.addEventListener("click", closeClipModal);
+		clipModalHeader.addEventListener("mousedown", function(event) {
+			if (event.target === clipModalClose) {
+				return;
+			}
+			isDraggingModal = true;
+			dragStartX = event.clientX;
+			dragStartY = event.clientY;
+			dragOriginOffsetX = modalDragOffsetX;
+			dragOriginOffsetY = modalDragOffsetY;
+			event.preventDefault();
+		});
+		document.addEventListener("mousemove", function(event) {
+			if (!isDraggingModal) {
+				return;
+			}
+			const nextOffsetX = dragOriginOffsetX + (event.clientX - dragStartX);
+			const nextOffsetY = dragOriginOffsetY + (event.clientY - dragStartY);
+			const clamped = clampModalOffset(nextOffsetX, nextOffsetY);
+			modalDragOffsetX = clamped.x;
+			modalDragOffsetY = clamped.y;
+			applyModalTransform();
+		});
+		document.addEventListener("mouseup", function() {
+			isDraggingModal = false;
+		});
+		document.addEventListener("keydown", function(event) {
+			if (event.key === "Escape" && clipModal.classList.contains("open")) {
+				closeClipModal();
+			}
+		});
+
+		interactionHandler.setInputAction(function(movement) {
+			if (!startPoint) {
+				return;
+			}
+			hoverPoint = getWorldPosition(movement.endPosition);
+			viewer.scene.requestRender();
+		}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+		interactionHandler.setInputAction(function(click) {
+			const worldPos = getWorldPosition(click.position);
+			if (!worldPos) {
+				return;
+			}
+
+			if (!startPoint) {
+				startPoint = worldPos;
+				hoverPoint = worldPos;
+				viewer.scene.requestRender();
+				return;
+			}
+
+			try {
+				const segmentPositions = buildFixedLengthSegment(startPoint, worldPos);
+				if (!segmentPositions) {
+					return;
+				}
+
+				if (finalizedSegmentEntity) {
+					viewer.entities.remove(finalizedSegmentEntity);
+				}
+				if (finalizedAreaEntity) {
+					viewer.entities.remove(finalizedAreaEntity);
+				}
+				if (finalizedRectangleEntity) {
+					viewer.entities.remove(finalizedRectangleEntity);
+				}
+
+				finalizedSegmentEntity = viewer.entities.add({
+					polyline: {
+						positions: segmentPositions,
+						width: 5,
+						material: Cesium.Color.ORANGE,
+						clampToGround: false
+					}
+				});
+
+				const areaConfig = buildRightSideArea(segmentPositions);
+				if (areaConfig) {
+					finalizedAreaEntity = viewer.entities.add({
+						polygon: {
+							hierarchy: areaConfig.hierarchy,
+							perPositionHeight: true,
+							material: Cesium.Color.ORANGE.withAlpha(0.3),
+							outline: true,
+							outlineColor: Cesium.Color.ORANGE.withAlpha(0.85)
+						}
+					});
+				}
+
+				const rectangleConfig = buildCenterRightRectangle(segmentPositions);
+				if (rectangleConfig) {
+					finalizedRectangleEntity = viewer.entities.add({
+						position: rectangleConfig.position,
+						orientation: rectangleConfig.orientation,
+						box: {
+							dimensions: rectangleConfig.dimensions,
+							material: Cesium.Color.DEEPSKYBLUE.withAlpha(0.35),
+							outline: true,
+							outlineColor: Cesium.Color.DEEPSKYBLUE
+						}
+					});
+					openClippedWindow(rectangleConfig);
+				}
+			} catch (error) {
+				console.error("Finalize segment/box failed:", error);
+			} finally {
+				startPoint = null;
+				hoverPoint = null;
+				viewer.scene.requestRender();
+			}
+		}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+		window.getInspectionInputs = function() {
+			return {
+				inspectionLengthM: Number(inspectionLengthInput.value) || 0,
+				roadWidthM: Number(roadWidthInput.value) || 0
+			};
+		};
+
+		function applyPointSize(size) {
+			const numericSize = Number(size);
+			pointSizeValue.textContent = numericSize.toFixed(1) + " px";
+
+			if (!pointCloudTileset) {
+				return;
+			}
+
+			pointCloudTileset.style = new Cesium.Cesium3DTileStyle({
+				pointSize: numericSize.toString()
+			});
+			viewer.scene.requestRender();
+		}
+
+		pointSizeRange.addEventListener("input", function() {
+			applyPointSize(this.value);
+		});
+
+		async function main() {
+			try {
+				viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(2767062);
+
+				const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(4880598);
+				viewer.scene.primitives.add(tileset);
+				pointCloudTileset = tileset;
+				applyPointSize(pointSizeRange.value);
+
+				await viewer.zoomTo(tileset);
+			} catch (error) {
+				console.error("Cesium initialization failed:", error);
+			}
+		}
+
+		main();
+	</script>
+</body>
+</html>
