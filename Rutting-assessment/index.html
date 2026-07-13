@@ -52,12 +52,41 @@
 			font-size: 13px;
 			font-weight: 600;
 		}
+		#shareUrlBtn {
+			margin-top: 10px;
+			width: 100%;
+			padding: 6px 8px;
+			font-size: 13px;
+		}
+		#shareUrlBtn:disabled {
+			background: #d1d1d1;
+			color: #666;
+			border: 1px solid #bcbcbc;
+			cursor: not-allowed;
+		}
+		#exportGeoJsonBtn,
+		#importGeoJsonBtn {
+			margin-top: 8px;
+			width: 100%;
+			padding: 6px 8px;
+			font-size: 13px;
+		}
+		#importGeoJsonInput {
+			display: none;
+		}
+		#importGeoJsonHint {
+			margin-top: 6px;
+			font-size: 12px;
+			line-height: 1.4;
+			color: #555;
+		}
 		#clipModal {
 			position: fixed;
 			inset: 0;
 			z-index: 300;
 			display: none;
 			background: transparent;
+			pointer-events: none;
 		}
 		#clipModal.open {
 			display: block;
@@ -81,6 +110,7 @@
 			display: flex;
 			flex-direction: column;
 			resize: both;
+			pointer-events: auto;
 		}
 		#clipModalHeader {
 			display: flex;
@@ -131,9 +161,14 @@
 			<input id="sectionThicknessRange" type="range" min="50" max="300" step="10" value="200">
 			<span id="sectionThicknessValue">200 mm</span>
 		</div>
+		<button id="shareUrlBtn" type="button" disabled>共有URLの作成</button>
+		<button id="exportGeoJsonBtn" type="button" disabled>GeoJSONエクスポート</button>
+		<button id="importGeoJsonBtn" type="button">GeoJSONインポート</button>
+		<input id="importGeoJsonInput" type="file" accept=".geojson,.json,application/geo+json,application/json">
+		<div id="importGeoJsonHint">診断済み検査区域のGeoJSONを読み込みます</div>
 	</div>
 	<div id="clipModal" aria-hidden="true">
-		<div id="clipModalDialog" role="dialog" aria-modal="true" aria-label="矩形内点群ビュー">
+		<div id="clipModalDialog" role="dialog" aria-modal="false" aria-label="矩形内点群ビュー">
 			<div id="clipModalHeader">
 				<span>矩形内点群ビュー</span>
 				<button id="clipModalClose" type="button">閉じる</button>
@@ -152,6 +187,10 @@
 		const pointSizeValue = document.getElementById("pointSizeValue");
 		const sectionThicknessRange = document.getElementById("sectionThicknessRange");
 		const sectionThicknessValue = document.getElementById("sectionThicknessValue");
+		const shareUrlBtn = document.getElementById("shareUrlBtn");
+		const exportGeoJsonBtn = document.getElementById("exportGeoJsonBtn");
+		const importGeoJsonBtn = document.getElementById("importGeoJsonBtn");
+		const importGeoJsonInput = document.getElementById("importGeoJsonInput");
 		const clipModal = document.getElementById("clipModal");
 		const clipModalDialog = document.getElementById("clipModalDialog");
 		const clipModalHeader = document.getElementById("clipModalHeader");
@@ -165,11 +204,21 @@
 		let dragOriginOffsetX = 0;
 		let dragOriginOffsetY = 0;
 		let pointCloudTileset = null;
+		let activeRectangleConfig = null;
 		let startPoint = null;
 		let hoverPoint = null;
 		let finalizedSegmentEntity = null;
 		let finalizedAreaEntity = null;
 		let finalizedRectangleEntity = null;
+		let diagnosisLabelEntity = null;
+		let activeInspectionAreaCenter = null;
+		let activeInspectionAreaPositions = null;
+		let lastDiagnosisPayload = null;
+		let currentInspectionDiagnosed = false;
+		let currentInspectionDiagnosisRecordIndex = -1;
+		let currentInspectionVisualRegistered = false;
+		let diagnosedRegions = [];
+		let diagnosedVisualEntities = [];
 		const DEFAULT_SECTION_THICKNESS_MM = 200;
 		let currentSectionThicknessMm = DEFAULT_SECTION_THICKNESS_MM;
 
@@ -282,12 +331,15 @@
 			const unitRight = Cesium.Cartesian3.normalize(right, new Cesium.Cartesian3());
 			const roadWidth = getRoadWidthMeters();
 			const rightOffset = Cesium.Cartesian3.multiplyByScalar(unitRight, roadWidth, new Cesium.Cartesian3());
+			const visualLiftOffset = Cesium.Cartesian3.multiplyByScalar(up, 0.08, new Cesium.Cartesian3());
 
-			const startRight = Cesium.Cartesian3.add(start, rightOffset, new Cesium.Cartesian3());
-			const endRight = Cesium.Cartesian3.add(end, rightOffset, new Cesium.Cartesian3());
+			const liftedStart = Cesium.Cartesian3.add(start, visualLiftOffset, new Cesium.Cartesian3());
+			const liftedEnd = Cesium.Cartesian3.add(end, visualLiftOffset, new Cesium.Cartesian3());
+			const startRight = Cesium.Cartesian3.add(liftedStart, rightOffset, new Cesium.Cartesian3());
+			const endRight = Cesium.Cartesian3.add(liftedEnd, rightOffset, new Cesium.Cartesian3());
 
 			return {
-				hierarchy: new Cesium.PolygonHierarchy([start, end, endRight, startRight])
+				hierarchy: new Cesium.PolygonHierarchy([liftedStart, liftedEnd, endRight, startRight])
 			};
 		}
 
@@ -344,6 +396,40 @@
 			return [cartesian.x, cartesian.y, cartesian.z];
 		}
 
+		function cartesianFromArray(values) {
+			if (!Array.isArray(values) || values.length !== 3) {
+				return null;
+			}
+			return new Cesium.Cartesian3(values[0], values[1], values[2]);
+		}
+
+		function cartesianArrayToLngLatHeight(cartesianArray) {
+			const cartesian = cartesianFromArray(cartesianArray);
+			if (!cartesian) {
+				return null;
+			}
+			const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+			return [
+				Cesium.Math.toDegrees(cartographic.longitude),
+				Cesium.Math.toDegrees(cartographic.latitude),
+				cartographic.height
+			];
+		}
+
+		function lngLatHeightToCartesianArray(lngLatHeight) {
+			if (!Array.isArray(lngLatHeight) || lngLatHeight.length < 2) {
+				return null;
+			}
+			const longitude = Number(lngLatHeight[0]);
+			const latitude = Number(lngLatHeight[1]);
+			const height = Number.isFinite(Number(lngLatHeight[2])) ? Number(lngLatHeight[2]) : 0;
+			if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+				return null;
+			}
+			const cartesian = Cesium.Cartesian3.fromDegrees(longitude, latitude, height);
+			return cartesianToArray(cartesian);
+		}
+
 		function openClippedWindow(rectangleConfig) {
 			if (!rectangleConfig) {
 				return;
@@ -370,6 +456,454 @@
 			clipModalFrame.src = "./clip-view.html?" + params.toString();
 			clipModal.classList.add("open");
 			clipModal.setAttribute("aria-hidden", "false");
+		}
+
+		function syncSectionThicknessToOpenClipView() {
+			if (!clipModal.classList.contains("open") || !clipModalFrame.contentWindow) {
+				return;
+			}
+
+			const sectionThicknessMm = getSectionThicknessMm();
+			clipModalFrame.contentWindow.postMessage({
+				type: "updateSectionThickness",
+				sectionThicknessMm: sectionThicknessMm,
+				sectionThicknessM: sectionThicknessMm / 1000
+			}, "*");
+		}
+
+		function syncPointSizeToOpenClipView() {
+			if (!clipModal.classList.contains("open") || !clipModalFrame.contentWindow) {
+				return;
+			}
+
+			const pointSize = Number(pointSizeRange.value);
+			if (!Number.isFinite(pointSize) || pointSize <= 0) {
+				return;
+			}
+
+			clipModalFrame.contentWindow.postMessage({
+				type: "updatePointSize",
+				pointSize: pointSize
+			}, "*");
+		}
+
+		function updateDisplayedSectionThickness() {
+			if (!activeRectangleConfig || !activeRectangleConfig.dimensions) {
+				syncSectionThicknessToOpenClipView();
+				return;
+			}
+
+			const sectionThicknessM = getSectionThicknessMeters();
+			activeRectangleConfig.dimensions = new Cesium.Cartesian3(
+				activeRectangleConfig.dimensions.x,
+				sectionThicknessM,
+				activeRectangleConfig.dimensions.z
+			);
+			activeRectangleConfig.sectionThicknessMm = getSectionThicknessMm();
+			activeRectangleConfig.sectionThicknessM = sectionThicknessM;
+
+			if (finalizedRectangleEntity && finalizedRectangleEntity.box) {
+				finalizedRectangleEntity.box.dimensions = activeRectangleConfig.dimensions;
+			}
+
+			syncSectionThicknessToOpenClipView();
+			viewer.scene.requestRender();
+		}
+
+		function getDiagnosisVisuals(diagnosis) {
+			if (diagnosis === "診断区分Ⅰ") {
+				return {
+					fill: Cesium.Color.DODGERBLUE.withAlpha(0.35),
+					outline: Cesium.Color.DODGERBLUE
+				};
+			}
+			if (diagnosis === "診断区分Ⅱ") {
+				return {
+					fill: Cesium.Color.GOLD.withAlpha(0.35),
+					outline: Cesium.Color.GOLD
+				};
+			}
+			if (diagnosis === "診断区分Ⅲ") {
+				return {
+					fill: Cesium.Color.RED.withAlpha(0.35),
+					outline: Cesium.Color.RED
+				};
+			}
+
+			return null;
+		}
+
+		function buildDiagnosisLabelText(region) {
+			return region.diagnosis + "\nMax " + Number(region.maxMm).toFixed(1) + " mm";
+		}
+
+		function renderDiagnosedRegion(region) {
+			if (!region) {
+				return;
+			}
+			const visuals = getDiagnosisVisuals(region.diagnosis);
+			if (!visuals) {
+				return;
+			}
+
+			const polygonPositions = Array.isArray(region.positions)
+				? region.positions.map(cartesianFromArray).filter(function(pos) { return !!pos; })
+				: [];
+			if (polygonPositions.length >= 3) {
+				const areaEntity = viewer.entities.add({
+					polygon: {
+						hierarchy: new Cesium.PolygonHierarchy(polygonPositions),
+						perPositionHeight: true,
+						material: visuals.fill,
+						outline: true,
+						outlineColor: visuals.outline
+					}
+				});
+				diagnosedVisualEntities.push(areaEntity);
+			}
+
+			const center = cartesianFromArray(region.center);
+			if (center) {
+				const labelEntity = viewer.entities.add({
+					position: center,
+					label: {
+						text: buildDiagnosisLabelText(region),
+						font: "16px Segoe UI",
+						fillColor: Cesium.Color.WHITE,
+						showBackground: true,
+						backgroundColor: Cesium.Color.BLACK.withAlpha(0.6),
+						heightReference: Cesium.HeightReference.NONE,
+						pixelOffset: new Cesium.Cartesian2(0, -8),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY
+					}
+				});
+				diagnosedVisualEntities.push(labelEntity);
+			}
+		}
+
+		function upsertCurrentDiagnosedRegion(payload) {
+			if (!payload || !activeInspectionAreaCenter || !Array.isArray(activeInspectionAreaPositions)) {
+				return;
+			}
+
+			const regionRecord = {
+				diagnosis: payload.diagnosis,
+				d1Mm: payload.d1Mm,
+				d2Mm: payload.d2Mm,
+				maxMm: payload.maxMm,
+				center: cartesianToArray(activeInspectionAreaCenter),
+				positions: activeInspectionAreaPositions.map(function(position) {
+					return cartesianToArray(position);
+				})
+			};
+
+			if (currentInspectionDiagnosisRecordIndex >= 0 && currentInspectionDiagnosisRecordIndex < diagnosedRegions.length) {
+				diagnosedRegions[currentInspectionDiagnosisRecordIndex] = regionRecord;
+			} else {
+				diagnosedRegions.push(regionRecord);
+				currentInspectionDiagnosisRecordIndex = diagnosedRegions.length - 1;
+			}
+		}
+
+		function updateShareUi() {
+			if (!shareUrlBtn || !exportGeoJsonBtn) {
+				return;
+			}
+
+			const hasDiagnosedRegions = diagnosedRegions.length > 0;
+			shareUrlBtn.disabled = !hasDiagnosedRegions;
+			exportGeoJsonBtn.disabled = !hasDiagnosedRegions;
+		}
+
+		function buildDiagnosedRegionsGeoJson() {
+			return {
+				type: "FeatureCollection",
+				features: diagnosedRegions.map(function(region) {
+					const ring = region.positions
+						.map(cartesianArrayToLngLatHeight)
+						.filter(function(coord) { return !!coord; });
+					if (ring.length > 0) {
+						const first = ring[0];
+						const last = ring[ring.length - 1];
+						if (first[0] !== last[0] || first[1] !== last[1] || first[2] !== last[2]) {
+							ring.push([first[0], first[1], first[2]]);
+						}
+					}
+
+					return {
+						type: "Feature",
+						properties: {
+							diagnosis: region.diagnosis,
+							d1Mm: Number(region.d1Mm),
+							d2Mm: Number(region.d2Mm),
+							maxMm: Number(region.maxMm),
+							center: cartesianArrayToLngLatHeight(region.center)
+						},
+						geometry: {
+							type: "Polygon",
+							coordinates: [ring]
+						}
+					};
+				})
+			};
+		}
+
+		function downloadTextFile(fileName, content, mimeType) {
+			const blob = new Blob([content], { type: mimeType });
+			const objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			anchor.download = fileName;
+			document.body.appendChild(anchor);
+			anchor.click();
+			document.body.removeChild(anchor);
+			URL.revokeObjectURL(objectUrl);
+		}
+
+		function exportDiagnosedRegionsAsGeoJson() {
+			if (diagnosedRegions.length === 0) {
+				return;
+			}
+			const geoJson = buildDiagnosedRegionsGeoJson();
+			downloadTextFile(
+				"rutting-diagnosis-regions.geojson",
+				JSON.stringify(geoJson, null, 2),
+				"application/geo+json"
+			);
+		}
+
+		function clearDiagnosedVisuals() {
+			diagnosedVisualEntities.forEach(function(entity) {
+				viewer.entities.remove(entity);
+			});
+			diagnosedVisualEntities = [];
+			diagnosisLabelEntity = null;
+			finalizedSegmentEntity = null;
+			finalizedAreaEntity = null;
+			finalizedRectangleEntity = null;
+			activeRectangleConfig = null;
+			activeInspectionAreaCenter = null;
+			activeInspectionAreaPositions = null;
+			currentInspectionDiagnosed = false;
+			currentInspectionDiagnosisRecordIndex = -1;
+			currentInspectionVisualRegistered = false;
+		}
+
+		function buildRegionFromGeoJsonFeature(feature) {
+			if (!feature || !feature.geometry || feature.geometry.type !== "Polygon") {
+				return null;
+			}
+			const properties = feature.properties || {};
+			const diagnosis = properties.diagnosis;
+			const d1Mm = Number(properties.d1Mm);
+			const d2Mm = Number(properties.d2Mm);
+			const maxMm = Number(properties.maxMm);
+			const rings = feature.geometry.coordinates;
+			if (!diagnosis || !Array.isArray(rings) || rings.length === 0) {
+				return null;
+			}
+
+			let positions = rings[0]
+				.map(lngLatHeightToCartesianArray)
+				.filter(function(position) { return !!position; });
+
+			if (positions.length >= 2) {
+				const first = positions[0];
+				const last = positions[positions.length - 1];
+				if (first[0] === last[0] && first[1] === last[1] && first[2] === last[2]) {
+					positions = positions.slice(0, positions.length - 1);
+				}
+			}
+
+			if (positions.length < 3 || !Number.isFinite(d1Mm) || !Number.isFinite(d2Mm) || !Number.isFinite(maxMm)) {
+				return null;
+			}
+
+			let center = lngLatHeightToCartesianArray(properties.center);
+			if (!center) {
+				const centerCartesian = positions
+					.map(cartesianFromArray)
+					.reduce(function(acc, current) {
+						return Cesium.Cartesian3.add(acc, current, acc);
+					}, new Cesium.Cartesian3());
+				Cesium.Cartesian3.divideByScalar(centerCartesian, positions.length, centerCartesian);
+				center = cartesianToArray(centerCartesian);
+			}
+
+			return {
+				diagnosis: diagnosis,
+				d1Mm: d1Mm,
+				d2Mm: d2Mm,
+				maxMm: maxMm,
+				center: center,
+				positions: positions
+			};
+		}
+
+		function importDiagnosedRegionsFromGeoJsonObject(geoJsonObject) {
+			if (!geoJsonObject || geoJsonObject.type !== "FeatureCollection" || !Array.isArray(geoJsonObject.features)) {
+				alert("有効な GeoJSON FeatureCollection ではありません。");
+				return;
+			}
+
+			const importedRegions = geoJsonObject.features
+				.map(buildRegionFromGeoJsonFeature)
+				.filter(function(region) { return !!region; });
+
+			if (importedRegions.length === 0) {
+				alert("診断済み検査区域データが見つかりませんでした。");
+				return;
+			}
+
+			clearUndiagnosedCurrentInspection();
+			clearDiagnosedVisuals();
+			diagnosedRegions = importedRegions;
+			diagnosedRegions.forEach(function(region) {
+				renderDiagnosedRegion(region);
+			});
+			lastDiagnosisPayload = diagnosedRegions[diagnosedRegions.length - 1];
+			updateShareUi();
+			viewer.scene.requestRender();
+		}
+
+		function restoreDiagnosisPayloadFromUrl() {
+			const params = new URLSearchParams(window.location.search);
+			const rawRegions = params.get("regions");
+			if (!rawRegions) {
+				return;
+			}
+
+			try {
+				const parsed = JSON.parse(rawRegions);
+				if (!Array.isArray(parsed)) {
+					return;
+				}
+
+				diagnosedRegions = parsed.filter(function(region) {
+					return region &&
+						typeof region.diagnosis === "string" &&
+						Number.isFinite(Number(region.d1Mm)) &&
+						Number.isFinite(Number(region.d2Mm)) &&
+						Number.isFinite(Number(region.maxMm)) &&
+						Array.isArray(region.center) &&
+						Array.isArray(region.positions);
+				});
+
+				diagnosedRegions.forEach(function(region) {
+					renderDiagnosedRegion(region);
+				});
+				if (diagnosedRegions.length > 0) {
+					lastDiagnosisPayload = diagnosedRegions[diagnosedRegions.length - 1];
+				}
+			} catch (error) {
+				console.warn("Failed to restore diagnosed regions from URL", error);
+			}
+
+			updateShareUi();
+		}
+
+		function buildShareUrl() {
+			if (diagnosedRegions.length === 0) {
+				return "";
+			}
+
+			const shareUrl = new URL(window.location.href);
+			shareUrl.searchParams.delete("diag");
+			shareUrl.searchParams.delete("d1");
+			shareUrl.searchParams.delete("d2");
+			shareUrl.searchParams.delete("max");
+			shareUrl.searchParams.set("regions", JSON.stringify(diagnosedRegions));
+			return shareUrl.toString();
+		}
+
+		async function createAndCopyShareUrl() {
+			const shareUrl = buildShareUrl();
+			if (!shareUrl) {
+				return;
+			}
+
+			try {
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					await navigator.clipboard.writeText(shareUrl);
+					return;
+				}
+			} catch (error) {
+				console.warn("Clipboard copy failed", error);
+			}
+			window.prompt("共有URL", shareUrl);
+		}
+
+		function applyDiagnosisToInspectionArea(diagnosis, maxMm) {
+			const visuals = getDiagnosisVisuals(diagnosis);
+			if (!visuals || !finalizedAreaEntity || !finalizedAreaEntity.polygon) {
+				return;
+			}
+
+			finalizedAreaEntity.polygon.material = visuals.fill;
+			finalizedAreaEntity.polygon.outlineColor = visuals.outline;
+
+			if (diagnosisLabelEntity) {
+				viewer.entities.remove(diagnosisLabelEntity);
+			}
+
+			if (activeInspectionAreaCenter) {
+				diagnosisLabelEntity = viewer.entities.add({
+					position: activeInspectionAreaCenter,
+					label: {
+						text: diagnosis + "\nMax " + Number(maxMm).toFixed(1) + " mm",
+						font: "16px Segoe UI",
+						fillColor: Cesium.Color.WHITE,
+						showBackground: true,
+						backgroundColor: Cesium.Color.BLACK.withAlpha(0.6),
+						heightReference: Cesium.HeightReference.NONE,
+						pixelOffset: new Cesium.Cartesian2(0, -8),
+						disableDepthTestDistance: Number.POSITIVE_INFINITY
+					}
+				});
+			}
+
+			currentInspectionDiagnosed = true;
+			if (!currentInspectionVisualRegistered) {
+				if (finalizedSegmentEntity) {
+					diagnosedVisualEntities.push(finalizedSegmentEntity);
+				}
+				if (finalizedAreaEntity) {
+					diagnosedVisualEntities.push(finalizedAreaEntity);
+				}
+				if (finalizedRectangleEntity) {
+					diagnosedVisualEntities.push(finalizedRectangleEntity);
+				}
+				currentInspectionVisualRegistered = true;
+			}
+			if (diagnosisLabelEntity) {
+				diagnosedVisualEntities.push(diagnosisLabelEntity);
+			}
+
+			viewer.scene.requestRender();
+		}
+
+		function clearUndiagnosedCurrentInspection() {
+			if (currentInspectionDiagnosed) {
+				return;
+			}
+
+			if (finalizedSegmentEntity) {
+				viewer.entities.remove(finalizedSegmentEntity);
+				finalizedSegmentEntity = null;
+			}
+			if (finalizedAreaEntity) {
+				viewer.entities.remove(finalizedAreaEntity);
+				finalizedAreaEntity = null;
+			}
+			if (finalizedRectangleEntity) {
+				viewer.entities.remove(finalizedRectangleEntity);
+				finalizedRectangleEntity = null;
+			}
+			activeRectangleConfig = null;
+			activeInspectionAreaCenter = null;
+			activeInspectionAreaPositions = null;
+			currentInspectionDiagnosisRecordIndex = -1;
+			currentInspectionVisualRegistered = false;
 		}
 
 		function closeClipModal() {
@@ -424,6 +958,38 @@
 			}
 		});
 
+		window.addEventListener("message", function(event) {
+			if (!event.data || event.data.type !== "setDiagnosisCategory") {
+				return;
+			}
+			if (!clipModalFrame.contentWindow || event.source !== clipModalFrame.contentWindow) {
+				return;
+			}
+
+			const diagnosis = event.data.diagnosis;
+			const maxMm = Number(event.data.maxMm);
+			const d1Mm = Number(event.data.d1Mm);
+			const d2Mm = Number(event.data.d2Mm);
+			if (!diagnosis || !Number.isFinite(maxMm) || !Number.isFinite(d1Mm) || !Number.isFinite(d2Mm)) {
+				return;
+			}
+
+			lastDiagnosisPayload = {
+				diagnosis: diagnosis,
+				d1Mm: d1Mm,
+				d2Mm: d2Mm,
+				maxMm: maxMm
+			};
+			upsertCurrentDiagnosedRegion(lastDiagnosisPayload);
+			updateShareUi();
+			applyDiagnosisToInspectionArea(diagnosis, maxMm);
+		});
+
+		clipModalFrame.addEventListener("load", function() {
+			syncSectionThicknessToOpenClipView();
+			syncPointSizeToOpenClipView();
+		});
+
 		interactionHandler.setInputAction(function(movement) {
 			if (!startPoint) {
 				return;
@@ -451,15 +1017,8 @@
 					return;
 				}
 
-				if (finalizedSegmentEntity) {
-					viewer.entities.remove(finalizedSegmentEntity);
-				}
-				if (finalizedAreaEntity) {
-					viewer.entities.remove(finalizedAreaEntity);
-				}
-				if (finalizedRectangleEntity) {
-					viewer.entities.remove(finalizedRectangleEntity);
-				}
+				clearUndiagnosedCurrentInspection();
+				activeInspectionAreaPositions = null;
 
 				finalizedSegmentEntity = viewer.entities.add({
 					polyline: {
@@ -472,6 +1031,9 @@
 
 				const areaConfig = buildRightSideArea(segmentPositions);
 				if (areaConfig) {
+					activeInspectionAreaPositions = areaConfig.hierarchy.positions.map(function(position) {
+						return Cesium.Cartesian3.clone(position, new Cesium.Cartesian3());
+					});
 					finalizedAreaEntity = viewer.entities.add({
 						polygon: {
 							hierarchy: areaConfig.hierarchy,
@@ -485,17 +1047,21 @@
 
 				const rectangleConfig = buildCenterRightRectangle(segmentPositions);
 				if (rectangleConfig) {
+					currentInspectionDiagnosed = false;
+					currentInspectionDiagnosisRecordIndex = -1;
+					activeRectangleConfig = rectangleConfig;
+					activeInspectionAreaCenter = Cesium.Cartesian3.clone(activeRectangleConfig.position, new Cesium.Cartesian3());
 					finalizedRectangleEntity = viewer.entities.add({
-						position: rectangleConfig.position,
-						orientation: rectangleConfig.orientation,
+						position: activeRectangleConfig.position,
+						orientation: activeRectangleConfig.orientation,
 						box: {
-							dimensions: rectangleConfig.dimensions,
+							dimensions: activeRectangleConfig.dimensions,
 							material: Cesium.Color.DEEPSKYBLUE.withAlpha(0.35),
 							outline: true,
 							outlineColor: Cesium.Color.DEEPSKYBLUE
 						}
 					});
-					openClippedWindow(rectangleConfig);
+					openClippedWindow(activeRectangleConfig);
 				}
 			} catch (error) {
 				console.error("Finalize segment/box failed:", error);
@@ -524,12 +1090,51 @@
 			pointCloudTileset.style = new Cesium.Cesium3DTileStyle({
 				pointSize: numericSize.toString()
 			});
+			syncPointSizeToOpenClipView();
 			viewer.scene.requestRender();
 		}
 
 		pointSizeRange.addEventListener("input", function() {
 			applyPointSize(this.value);
 		});
+
+		if (shareUrlBtn) {
+			shareUrlBtn.addEventListener("click", function() {
+				createAndCopyShareUrl();
+			});
+		}
+
+		if (exportGeoJsonBtn) {
+			exportGeoJsonBtn.addEventListener("click", function() {
+				exportDiagnosedRegionsAsGeoJson();
+			});
+		}
+
+		if (importGeoJsonBtn && importGeoJsonInput) {
+			importGeoJsonBtn.addEventListener("click", function() {
+				importGeoJsonInput.click();
+			});
+			importGeoJsonInput.addEventListener("change", function() {
+				const selectedFile = importGeoJsonInput.files && importGeoJsonInput.files[0];
+				if (!selectedFile) {
+					return;
+				}
+				const reader = new FileReader();
+				reader.onload = function() {
+					try {
+						const content = String(reader.result || "");
+						const geoJsonObject = JSON.parse(content);
+						importDiagnosedRegionsFromGeoJsonObject(geoJsonObject);
+					} catch (error) {
+						console.error("GeoJSON import failed", error);
+						alert("GeoJSON の読み込みに失敗しました。");
+					} finally {
+						importGeoJsonInput.value = "";
+					}
+				};
+				reader.readAsText(selectedFile);
+			});
+		}
 
 		function applySectionThicknessDisplay(valueMm) {
 			const numericValue = Number(valueMm);
@@ -540,9 +1145,12 @@
 
 		sectionThicknessRange.addEventListener("input", function() {
 			applySectionThicknessDisplay(this.value);
+			updateDisplayedSectionThickness();
 		});
 
 		applySectionThicknessDisplay(DEFAULT_SECTION_THICKNESS_MM);
+		restoreDiagnosisPayloadFromUrl();
+		updateShareUi();
 
 		async function main() {
 			try {

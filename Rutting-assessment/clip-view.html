@@ -32,6 +32,36 @@
 			padding: 4px 8px;
 			font-size: 12px;
 		}
+		#measureTable {
+			margin-top: 8px;
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 12px;
+		}
+		#measureTable th,
+		#measureTable td {
+			border: 1px solid rgba(0, 0, 0, 0.2);
+			padding: 3px 6px;
+			text-align: left;
+		}
+		#measureTable th {
+			background: rgba(0, 0, 0, 0.06);
+		}
+		#diagnosisSetBtn {
+			display: block;
+			width: 100%;
+			margin-top: 8px;
+		}
+		#diagnosisSetBtn:disabled {
+			background: #c8c8c8;
+			color: #6e6e6e;
+			border-color: #b5b5b5;
+			cursor: not-allowed;
+		}
+		#diagnosisResult {
+			margin-top: 6px;
+			font-weight: 600;
+		}
 	</style>
 </head>
 <body>
@@ -44,6 +74,26 @@
 		<button id="deformBtn" type="button">デフォルメ OFF</button>
 		<button id="measureBtn" type="button">距離計測 OFF</button>
 		<div id="measureStatus">3点で垂線距離を測定します</div>
+		<table id="measureTable" aria-label="計測結果">
+			<thead>
+				<tr>
+					<th>項目</th>
+					<th>値</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td>D1</td>
+					<td id="measureD1">--</td>
+				</tr>
+				<tr>
+					<td>D2</td>
+					<td id="measureD2">--</td>
+				</tr>
+			</tbody>
+		</table>
+		<button id="diagnosisSetBtn" type="button" disabled>診断区分セット</button>
+		<div id="diagnosisResult">診断区分: --</div>
 	</div>
 
 	<script>
@@ -82,6 +132,53 @@
 		let clipDeformed = false;
 		let clipDeformMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
 		let clipDeformInverseMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
+		let applyExternalSectionThickness = null;
+		let applyExternalPointSize = null;
+		let pendingSectionThicknessMm = null;
+		let pendingPointSize = null;
+		let completedMeasurementCount = 0;
+		const measureD1Cell = document.getElementById("measureD1");
+		const measureD2Cell = document.getElementById("measureD2");
+		const diagnosisSetBtn = document.getElementById("diagnosisSetBtn");
+		const diagnosisResult = document.getElementById("diagnosisResult");
+		let measureD1Mm = null;
+		let measureD2Mm = null;
+
+		window.addEventListener("message", function(event) {
+			const data = event.data;
+			if (!data) {
+				return;
+			}
+
+			if (data.type === "updatePointSize") {
+				const incomingPointSize = Number(data.pointSize);
+				if (!Number.isFinite(incomingPointSize) || incomingPointSize <= 0) {
+					return;
+				}
+
+				if (typeof applyExternalPointSize === "function") {
+					applyExternalPointSize(incomingPointSize);
+				} else {
+					pendingPointSize = incomingPointSize;
+				}
+				return;
+			}
+
+			if (data.type !== "updateSectionThickness") {
+				return;
+			}
+
+			const incomingThicknessMm = Number(data.sectionThicknessMm);
+			if (!Number.isFinite(incomingThicknessMm)) {
+				return;
+			}
+
+			if (typeof applyExternalSectionThickness === "function") {
+				applyExternalSectionThickness(incomingThicknessMm);
+			} else {
+				pendingSectionThicknessMm = incomingThicknessMm;
+			}
+		});
 
 		function parseRectanglePayload() {
 			const params = new URLSearchParams(window.location.search);
@@ -228,6 +325,84 @@
 			document.getElementById("measureStatus").textContent = text;
 		}
 
+		function setMeasureResult(slotName, distanceMm) {
+			const text = Number(distanceMm).toFixed(1) + " mm";
+			if (slotName === "D1" && measureD1Cell) {
+				measureD1Cell.textContent = text;
+				measureD1Mm = Number(distanceMm);
+				return;
+			}
+			if (slotName === "D2" && measureD2Cell) {
+				measureD2Cell.textContent = text;
+				measureD2Mm = Number(distanceMm);
+			}
+		}
+
+		function updateDiagnosisButtonState() {
+			const hasBoth = Number.isFinite(measureD1Mm) && Number.isFinite(measureD2Mm);
+			if (diagnosisSetBtn) {
+				diagnosisSetBtn.disabled = !hasBoth;
+			}
+			if (!hasBoth && diagnosisResult) {
+				diagnosisResult.textContent = "診断区分: --";
+			}
+		}
+
+		function getDiagnosisCategory(maxMm) {
+			if (maxMm < 20.0) {
+				return "診断区分Ⅰ";
+			}
+			if (maxMm < 40.0) {
+				return "診断区分Ⅱ";
+			}
+			return "診断区分Ⅲ";
+		}
+
+		function applyDiagnosisFromD1D2() {
+			if (!Number.isFinite(measureD1Mm) || !Number.isFinite(measureD2Mm)) {
+				return;
+			}
+			const maxMm = Math.max(measureD1Mm, measureD2Mm);
+			const diagnosis = getDiagnosisCategory(maxMm);
+			if (diagnosisResult) {
+				diagnosisResult.textContent = "診断区分: " + diagnosis + " (Max: " + maxMm.toFixed(1) + " mm)";
+			}
+			if (window.parent && window.parent !== window) {
+				window.parent.postMessage({
+					type: "setDiagnosisCategory",
+					diagnosis: diagnosis,
+					maxMm: maxMm,
+					d1Mm: measureD1Mm,
+					d2Mm: measureD2Mm
+				}, "*");
+			}
+			updateMeasureStatus("診断区分を設定しました: " + diagnosis + " (Max " + maxMm.toFixed(1) + " mm)");
+		}
+
+		function recordCompletedMeasurement(distanceMm) {
+			if (!Number.isFinite(distanceMm)) {
+				return;
+			}
+
+			if (completedMeasurementCount === 0) {
+				setMeasureResult("D1", distanceMm);
+				completedMeasurementCount = 1;
+				updateDiagnosisButtonState();
+				updateMeasureStatus("1回目計測完了: D1 に " + distanceMm.toFixed(1) + " mm を入力しました");
+				return;
+			}
+
+			if (completedMeasurementCount === 1) {
+				setMeasureResult("D2", distanceMm);
+				completedMeasurementCount = 2;
+				updateDiagnosisButtonState();
+				updateMeasureStatus("2回目計測完了: D2 に " + distanceMm.toFixed(1) + " mm を入力しました");
+				return;
+			}
+
+			updateMeasureStatus("D1/D2 は入力済みです。必要ならウィンドウを閉じて再計測してください");
+		}
+
 		function clearMeasurementGraphics() {
 			if (measureLineEntity) {
 				viewer.entities.remove(measureLineEntity);
@@ -338,6 +513,23 @@
 			return projectPointToSectionPlane(measurementPoint);
 		}
 
+		function calculatePerpendicularDistanceMm(startWorld, secondWorld, thirdWorld) {
+			const measureStart = getProjectedMeasurementPoint(startWorld);
+			const measureSecond = getProjectedMeasurementPoint(secondWorld);
+			const measureThird = getProjectedMeasurementPoint(thirdWorld);
+			if (!measureStart || !measureSecond || !measureThird) {
+				return null;
+			}
+
+			const measureFootPoint = projectPointOntoLine(measureThird, measureStart, measureSecond);
+			if (!measureFootPoint) {
+				return null;
+			}
+
+			const distanceMeters = Cesium.Cartesian3.distance(measureThird, measureFootPoint);
+			return distanceMeters * 1000.0;
+		}
+
 		function renderMeasurement() {
 			clearMeasurementGraphics();
 
@@ -422,6 +614,11 @@
 
 		function configureMeasurementMode() {
 			const measureButton = document.getElementById("measureBtn");
+			if (diagnosisSetBtn) {
+				diagnosisSetBtn.addEventListener("click", function() {
+					applyDiagnosisFromD1D2();
+				});
+			}
 
 			measureButton.addEventListener("click", function() {
 				measureEnabled = !measureEnabled;
@@ -464,6 +661,12 @@
 				measureHoverPoint = null;
 				addMeasurePoint(measureThirdPoint, Cesium.Color.LIME);
 				renderMeasurement();
+				const completedDistanceMm = calculatePerpendicularDistanceMm(
+					measureStartPoint,
+					measureSecondPoint,
+					measureThirdPoint
+				);
+				recordCompletedMeasurement(completedDistanceMm);
 			}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
 			popupHandler.setInputAction(function(movement) {
@@ -675,19 +878,32 @@
 			}
 			const baseModelMatrix = Cesium.Matrix4.clone(tileset.modelMatrix, new Cesium.Matrix4());
 
-			const requestedPointSize = Number(rectConfig.pointSize);
-			if (Number.isFinite(requestedPointSize) && requestedPointSize > 0) {
+			function applyPointSize(pointSizeValue) {
+				const requestedPointSize = Number(pointSizeValue);
+				if (!Number.isFinite(requestedPointSize) || requestedPointSize <= 0) {
+					return;
+				}
+				activeRectConfig.pointSize = requestedPointSize;
 				tileset.style = new Cesium.Cesium3DTileStyle({
 					pointSize: requestedPointSize.toString()
 				});
+				viewer.scene.requestRender();
+			}
+
+			const requestedPointSize = Number(activeRectConfig.pointSize);
+			applyPointSize(requestedPointSize);
+			applyExternalPointSize = applyPointSize;
+			if (Number.isFinite(pendingPointSize)) {
+				applyPointSize(pendingPointSize);
+				pendingPointSize = null;
 			}
 
 			let inverted = false;
 			let deformed = false;
 			let currentDeformMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
 			function applyClipping() {
-				const clippingConfig = buildClippingPlanes(rectConfig, inverted);
-				const clippingModelMatrix = buildClippingModelMatrixForTileset(rectConfig, tileset, baseModelMatrix);
+				const clippingConfig = buildClippingPlanes(activeRectConfig, inverted);
+				const clippingModelMatrix = buildClippingModelMatrixForTileset(activeRectConfig, tileset, baseModelMatrix);
 				tileset.clippingPlanes = new Cesium.ClippingPlaneCollection({
 					planes: clippingConfig.planes,
 					unionClippingRegions: clippingConfig.unionClippingRegions,
@@ -700,15 +916,15 @@
 
 			function applyVisualMode() {
 				if (deformed) {
-					const widthScale = Number.isFinite(Number(rectConfig.deformWidthScale)) ? Number(rectConfig.deformWidthScale) : 0.45;
-					const alongScale = Number.isFinite(Number(rectConfig.deformAlongScale)) ? Number(rectConfig.deformAlongScale) : 1.0;
-					const heightScale = Number.isFinite(Number(rectConfig.deformHeightScale)) ? Number(rectConfig.deformHeightScale) : 2.2;
-					currentDeformMatrix = buildDeformMatrix(rectConfig, widthScale, alongScale, heightScale);
+					const widthScale = Number.isFinite(Number(activeRectConfig.deformWidthScale)) ? Number(activeRectConfig.deformWidthScale) : 0.45;
+					const alongScale = Number.isFinite(Number(activeRectConfig.deformAlongScale)) ? Number(activeRectConfig.deformAlongScale) : 1.0;
+					const heightScale = Number.isFinite(Number(activeRectConfig.deformHeightScale)) ? Number(activeRectConfig.deformHeightScale) : 2.2;
+					currentDeformMatrix = buildDeformMatrix(activeRectConfig, widthScale, alongScale, heightScale);
 				} else {
 					currentDeformMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY, new Cesium.Matrix4());
 				}
 
-				applyDeformation(tileset, baseModelMatrix, rectConfig, deformed);
+				applyDeformation(tileset, baseModelMatrix, activeRectConfig, deformed);
 				clipInverted = inverted;
 				clipDeformed = deformed;
 				clipDeformMatrix = Cesium.Matrix4.clone(currentDeformMatrix, new Cesium.Matrix4());
@@ -733,11 +949,11 @@
 				resetInitialView();
 			});
 
-			const center = vecFromArray(rectConfig.center);
-			const dimensions = vecFromArray(rectConfig.dimensions);
-			const axisX = Cesium.Cartesian3.normalize(vecFromArray(rectConfig.axisX), new Cesium.Cartesian3());
-			const axisY = Cesium.Cartesian3.normalize(vecFromArray(rectConfig.axisY), new Cesium.Cartesian3());
-			const axisZ = Cesium.Cartesian3.normalize(vecFromArray(rectConfig.axisZ), new Cesium.Cartesian3());
+			const center = vecFromArray(activeRectConfig.center);
+			const dimensions = vecFromArray(activeRectConfig.dimensions);
+			const axisX = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisX), new Cesium.Cartesian3());
+			const axisY = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisY), new Cesium.Cartesian3());
+			const axisZ = Cesium.Cartesian3.normalize(vecFromArray(activeRectConfig.axisZ), new Cesium.Cartesian3());
 			const rotation = new Cesium.Matrix3(
 				axisX.x, axisY.x, axisZ.x,
 				axisX.y, axisY.y, axisZ.y,
@@ -755,6 +971,31 @@
 					outlineColor: Cesium.Color.CYAN
 				}
 			});
+
+			applyExternalSectionThickness = function(sectionThicknessMm) {
+				if (!activeRectConfig || !Array.isArray(activeRectConfig.dimensions) || activeRectConfig.dimensions.length !== 3) {
+					return;
+				}
+
+				const clampedMm = Cesium.Math.clamp(Number(sectionThicknessMm), 50, 300);
+				const thicknessM = clampedMm / 1000;
+				activeRectConfig.sectionThicknessMm = clampedMm;
+				activeRectConfig.sectionThicknessM = thicknessM;
+				activeRectConfig.dimensions[1] = thicknessM;
+				updateSectionThicknessHud(activeRectConfig);
+
+				if (boxEntity && boxEntity.box) {
+					boxEntity.box.dimensions = vecFromArray(activeRectConfig.dimensions);
+				}
+
+				applyVisualMode();
+				viewer.scene.requestRender();
+			};
+
+			if (Number.isFinite(pendingSectionThicknessMm)) {
+				applyExternalSectionThickness(pendingSectionThicknessMm);
+				pendingSectionThicknessMm = null;
+			}
 
 			resetInitialView();
 			configureOrthographicZoom();
