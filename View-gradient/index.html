@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cesium Basic - Nagoya Station</title>
+
+  <link
+    href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css"
+    rel="stylesheet"
+  />
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+
+  <style>
+    html, body, #cesiumContainer {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    #panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 8px;
+      padding: 10px 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      font-family: "Segoe UI", sans-serif;
+      min-width: 260px;
+    }
+
+    #visualizeBtn {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #888;
+      border-radius: 6px;
+      background: #f5f5f5;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    #visualizeBtn:disabled {
+      opacity: 0.65;
+      cursor: default;
+    }
+
+    #status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #333;
+      min-height: 1.4em;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+
+  <div id="panel">
+    <button id="visualizeBtn" type="button">勾配ベクトルを可視化</button>
+    <div id="status">ボタンを押すと名古屋駅周辺で計算します</div>
+  </div>
+
+  <script>
+    Cesium.Ion.defaultAccessToken =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
+
+    const viewer = new Cesium.Viewer("cesiumContainer", {
+      timeline: false,
+      animation: false
+    });
+
+    const statusEl = document.getElementById("status");
+    const visualizeBtn = document.getElementById("visualizeBtn");
+    visualizeBtn.disabled = true;
+    statusEl.textContent = "地形データを読み込み中...";
+
+    const nagoya = {
+      lon: 136.8815,
+      lat: 35.1709
+    };
+
+    let slopeArrowEntities = [];
+
+    const stationEntity = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(nagoya.lon, nagoya.lat, 20),
+      point: {
+        pixelSize: 10,
+        color: Cesium.Color.RED,
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2
+      },
+      label: {
+        text: "名古屋駅",
+        font: "16px sans-serif",
+        fillColor: Cesium.Color.WHITE,
+        showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.6),
+        pixelOffset: new Cesium.Cartesian2(0, -26)
+      }
+    });
+
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(nagoya.lon, nagoya.lat, 1200),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch: Cesium.Math.toRadians(-45),
+        roll: 0
+      },
+      duration: 1.8
+    });
+
+    async function initializeTerrain() {
+      try {
+        viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(2767062);
+        statusEl.textContent = "ボタンを押すと名古屋駅周辺で計算します";
+        visualizeBtn.disabled = false;
+      } catch (err) {
+        console.error("Terrain initialization failed:", err);
+        statusEl.textContent = "地形の読み込みに失敗しました";
+      }
+    }
+
+    initializeTerrain();
+
+    function cartographicFromMeterOffset(centerLonDeg, centerLatDeg, eastM, northM) {
+      const latRad = Cesium.Math.toRadians(centerLatDeg);
+      const metersPerDegLat = 111320.0;
+      const metersPerDegLon = metersPerDegLat * Math.cos(latRad);
+      const lon = centerLonDeg + eastM / metersPerDegLon;
+      const lat = centerLatDeg + northM / metersPerDegLat;
+      return Cesium.Cartographic.fromDegrees(lon, lat);
+    }
+
+    function clearSlopeVectors() {
+      for (const entity of slopeArrowEntities) {
+        viewer.entities.remove(entity);
+      }
+      slopeArrowEntities = [];
+    }
+
+    async function visualizeSlopeVector() {
+      visualizeBtn.disabled = true;
+      statusEl.textContent = "10m x 10m を 1m 格子で計算中...";
+
+      try {
+        const areaSizeMeters = 10;
+        const cellSizeMeters = 1;
+        const nodeCount = areaSizeMeters + 1;
+        const halfArea = areaSizeMeters * 0.5;
+        const nodeOffsetStart = -halfArea;
+
+        const centerCarto = cartographicFromMeterOffset(nagoya.lon, nagoya.lat, 0, 0);
+        const centerSample = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, [centerCarto]);
+        const centerHeight = Number.isFinite(centerSample[0].height) ? centerSample[0].height : 0;
+        const centerWorld = Cesium.Cartesian3.fromRadians(centerCarto.longitude, centerCarto.latitude, centerHeight);
+        const enu = Cesium.Transforms.eastNorthUpToFixedFrame(centerWorld);
+
+        const nodeCartographics = [];
+        for (let j = 0; j < nodeCount; j++) {
+          const north = nodeOffsetStart + j * cellSizeMeters;
+          for (let i = 0; i < nodeCount; i++) {
+            const east = nodeOffsetStart + i * cellSizeMeters;
+            nodeCartographics.push(cartographicFromMeterOffset(nagoya.lon, nagoya.lat, east, north));
+          }
+        }
+
+        const sampledNodes = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, nodeCartographics);
+        if (sampledNodes.some(function(p) { return !Number.isFinite(p.height); })) {
+          statusEl.textContent = "地形サンプルに欠損があり計算できません";
+          return;
+        }
+
+        const heights = [];
+        for (let j = 0; j < nodeCount; j++) {
+          const row = [];
+          for (let i = 0; i < nodeCount; i++) {
+            row.push(sampledNodes[j * nodeCount + i].height);
+          }
+          heights.push(row);
+        }
+
+        clearSlopeVectors();
+
+        let renderedCount = 0;
+        const arrowScale = 0.45;
+        for (let j = 0; j < areaSizeMeters; j++) {
+          for (let i = 0; i < areaSizeMeters; i++) {
+            const z00 = heights[j][i];
+            const z10 = heights[j][i + 1];
+            const z01 = heights[j + 1][i];
+            const z11 = heights[j + 1][i + 1];
+
+            const dzdx = ((z10 - z00) + (z11 - z01)) * 0.5 / cellSizeMeters;
+            const dzdy = ((z01 - z00) + (z11 - z10)) * 0.5 / cellSizeMeters;
+
+            const downhillLocal = new Cesium.Cartesian3(-dzdx, -dzdy, 0.0);
+            const downhillMag = Cesium.Cartesian3.magnitude(downhillLocal);
+            if (downhillMag < 1e-10) {
+              continue;
+            }
+            Cesium.Cartesian3.normalize(downhillLocal, downhillLocal);
+
+            const cellCenterEast = nodeOffsetStart + (i + 0.5) * cellSizeMeters;
+            const cellCenterNorth = nodeOffsetStart + (j + 0.5) * cellSizeMeters;
+            const cellCenterHeight = (z00 + z10 + z01 + z11) * 0.25;
+
+            const startLocal = new Cesium.Cartesian3(cellCenterEast, cellCenterNorth, cellCenterHeight - centerHeight + 0.2);
+            const endLocal = new Cesium.Cartesian3(
+              cellCenterEast + downhillLocal.x * arrowScale,
+              cellCenterNorth + downhillLocal.y * arrowScale,
+              cellCenterHeight - centerHeight + 0.2
+            );
+
+            const startWorld = Cesium.Matrix4.multiplyByPoint(enu, startLocal, new Cesium.Cartesian3());
+            const endWorld = Cesium.Matrix4.multiplyByPoint(enu, endLocal, new Cesium.Cartesian3());
+
+            slopeArrowEntities.push(viewer.entities.add({
+              polyline: {
+                positions: [startWorld, endWorld],
+                width: 4,
+                material: new Cesium.PolylineArrowMaterialProperty(Cesium.Color.YELLOW)
+              }
+            }));
+            renderedCount++;
+          }
+        }
+
+        statusEl.textContent = "可視化完了: " + renderedCount + " 本の勾配ベクトル";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "エラー: " + (err && err.message ? err.message : String(err));
+      } finally {
+        visualizeBtn.disabled = false;
+      }
+    }
+
+    visualizeBtn.addEventListener("click", visualizeSlopeVector);
+  </script>
+</body>
+</html>
