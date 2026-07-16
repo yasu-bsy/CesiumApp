@@ -44,6 +44,18 @@
       font-weight: 600;
     }
 
+    #clearVectorsBtn {
+      width: 100%;
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid #888;
+      border-radius: 6px;
+      background: #f5f5f5;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
     #visualizeBtn:disabled {
       opacity: 0.65;
       cursor: default;
@@ -62,6 +74,7 @@
 
   <div id="panel">
     <button id="visualizeBtn" type="button">勾配ベクトルを可視化</button>
+    <button id="clearVectorsBtn" type="button">ベクトル表示を削除</button>
     <div id="status">ボタンを押すと名古屋駅周辺で計算します</div>
   </div>
 
@@ -76,6 +89,7 @@
 
     const statusEl = document.getElementById("status");
     const visualizeBtn = document.getElementById("visualizeBtn");
+    const clearVectorsBtn = document.getElementById("clearVectorsBtn");
     visualizeBtn.disabled = true;
     statusEl.textContent = "地形データを読み込み中...";
 
@@ -85,6 +99,10 @@
     };
 
     let slopeArrowEntities = [];
+    let rectangleEntity = null;
+    let cornerPointEntities = [];
+    let selectedCorners = [];
+    let selectedRectangle = null;
 
     const stationEntity = viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(nagoya.lon, nagoya.lat, 20),
@@ -143,29 +161,133 @@
       slopeArrowEntities = [];
     }
 
+    function clearRectangle() {
+      if (rectangleEntity) {
+        viewer.entities.remove(rectangleEntity);
+        rectangleEntity = null;
+      }
+      for (const entity of cornerPointEntities) {
+        viewer.entities.remove(entity);
+      }
+      cornerPointEntities = [];
+      selectedCorners = [];
+      selectedRectangle = null;
+    }
+
+    function pickGroundPosition(screenPosition) {
+      const scene = viewer.scene;
+      const ray = viewer.camera.getPickRay(screenPosition);
+      if (!Cesium.defined(ray)) {
+        return undefined;
+      }
+      // Always pick from terrain surface to avoid selecting entities or other primitives.
+      return scene.globe.pick(ray, scene);
+    }
+
+    function buildRectangleFromThreePoints(p1, p2, p3) {
+      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(p1);
+      const invEnu = Cesium.Matrix4.inverse(enu, new Cesium.Matrix4());
+      const local2 = Cesium.Matrix4.multiplyByPoint(invEnu, p2, new Cesium.Cartesian3());
+      const local3 = Cesium.Matrix4.multiplyByPoint(invEnu, p3, new Cesium.Cartesian3());
+
+      const edgeX = new Cesium.Cartesian2(local2.x, local2.y);
+      const edgeXLength = Cesium.Cartesian2.magnitude(edgeX);
+      if (edgeXLength < 0.2) {
+        return undefined;
+      }
+
+      const axisX = Cesium.Cartesian2.normalize(edgeX, new Cesium.Cartesian2());
+      let axisY = new Cesium.Cartesian2(-axisX.y, axisX.x);
+      const toThird = new Cesium.Cartesian2(local3.x, local3.y);
+      let widthSigned = Cesium.Cartesian2.dot(toThird, axisY);
+      if (Math.abs(widthSigned) < 0.2) {
+        return undefined;
+      }
+      if (widthSigned < 0) {
+        axisY = Cesium.Cartesian2.negate(axisY, new Cesium.Cartesian2());
+        widthSigned = -widthSigned;
+      }
+
+      function rectLocalToEnu(x, y, z) {
+        return new Cesium.Cartesian3(
+          axisX.x * x + axisY.x * y,
+          axisX.y * x + axisY.y * y,
+          z
+        );
+      }
+
+      function enuToWorld(localPoint) {
+        return Cesium.Matrix4.multiplyByPoint(enu, localPoint, new Cesium.Cartesian3());
+      }
+
+      const cornersWorld = [
+        enuToWorld(rectLocalToEnu(0, 0, 0)),
+        enuToWorld(rectLocalToEnu(edgeXLength, 0, 0)),
+        enuToWorld(rectLocalToEnu(edgeXLength, widthSigned, 0)),
+        enuToWorld(rectLocalToEnu(0, widthSigned, 0))
+      ];
+
+      return {
+        enu: enu,
+        axisX: axisX,
+        axisY: axisY,
+        length: edgeXLength,
+        width: widthSigned,
+        cornersWorld: cornersWorld,
+        rectLocalToEnu: rectLocalToEnu,
+        enuToWorld: enuToWorld
+      };
+    }
+
+    function drawRectangleFromDefinition(rectDef) {
+      rectangleEntity = viewer.entities.add({
+        polygon: {
+          hierarchy: rectDef.cornersWorld,
+          material: Cesium.Color.CYAN.withAlpha(0.25),
+          classificationType: Cesium.ClassificationType.TERRAIN
+        }
+      });
+    }
+
     async function visualizeSlopeVector() {
       visualizeBtn.disabled = true;
-      statusEl.textContent = "10m x 10m を 1m 格子で計算中...";
+      statusEl.textContent = "選択した長方形内を 1m 格子で計算中...";
 
       try {
-        const areaSizeMeters = 10;
-        const cellSizeMeters = 1;
-        const nodeCount = areaSizeMeters + 1;
-        const halfArea = areaSizeMeters * 0.5;
-        const nodeOffsetStart = -halfArea;
+        if (!selectedRectangle) {
+          statusEl.textContent = "先に地表を3点クリックして長方形を作成してください";
+          return;
+        }
 
-        const centerCarto = cartographicFromMeterOffset(nagoya.lon, nagoya.lat, 0, 0);
-        const centerSample = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, [centerCarto]);
-        const centerHeight = Number.isFinite(centerSample[0].height) ? centerSample[0].height : 0;
-        const centerWorld = Cesium.Cartesian3.fromRadians(centerCarto.longitude, centerCarto.latitude, centerHeight);
-        const enu = Cesium.Transforms.eastNorthUpToFixedFrame(centerWorld);
+        clearSlopeVectors();
+
+        const cellSizeMeters = 1;
+        const widthMeters = selectedRectangle.length;
+        const heightMeters = selectedRectangle.width;
+        if (!Number.isFinite(widthMeters) || !Number.isFinite(heightMeters) || widthMeters < 0.2 || heightMeters < 0.2) {
+          statusEl.textContent = "長方形が小さすぎるため計算できません";
+          return;
+        }
+
+        const cellsX = Math.max(1, Math.round(widthMeters / cellSizeMeters));
+        const cellsY = Math.max(1, Math.round(heightMeters / cellSizeMeters));
+        const nodeCountX = cellsX + 1;
+        const nodeCountY = cellsY + 1;
+        const cellSizeEast = widthMeters / cellsX;
+        const cellSizeNorth = heightMeters / cellsY;
+
+        const baseCarto = Cesium.Cartographic.fromCartesian(selectedCorners[0]);
+        const baseHeight = Cesium.defined(baseCarto) && Number.isFinite(baseCarto.height) ? baseCarto.height : 0;
 
         const nodeCartographics = [];
-        for (let j = 0; j < nodeCount; j++) {
-          const north = nodeOffsetStart + j * cellSizeMeters;
-          for (let i = 0; i < nodeCount; i++) {
-            const east = nodeOffsetStart + i * cellSizeMeters;
-            nodeCartographics.push(cartographicFromMeterOffset(nagoya.lon, nagoya.lat, east, north));
+        for (let j = 0; j < nodeCountY; j++) {
+          for (let i = 0; i < nodeCountX; i++) {
+            const nodeRectX = i * cellSizeEast;
+            const nodeRectY = j * cellSizeNorth;
+            const nodeWorld = selectedRectangle.enuToWorld(
+              selectedRectangle.rectLocalToEnu(nodeRectX, nodeRectY, 0)
+            );
+            nodeCartographics.push(Cesium.Cartographic.fromCartesian(nodeWorld));
           }
         }
 
@@ -176,27 +298,25 @@
         }
 
         const heights = [];
-        for (let j = 0; j < nodeCount; j++) {
+        for (let j = 0; j < nodeCountY; j++) {
           const row = [];
-          for (let i = 0; i < nodeCount; i++) {
-            row.push(sampledNodes[j * nodeCount + i].height);
+          for (let i = 0; i < nodeCountX; i++) {
+            row.push(sampledNodes[j * nodeCountX + i].height);
           }
           heights.push(row);
         }
 
-        clearSlopeVectors();
-
         let renderedCount = 0;
-        const arrowScale = 0.45;
-        for (let j = 0; j < areaSizeMeters; j++) {
-          for (let i = 0; i < areaSizeMeters; i++) {
+        const arrowScale = Math.max(0.2, Math.min(cellSizeEast, cellSizeNorth) * 0.45);
+        for (let j = 0; j < cellsY; j++) {
+          for (let i = 0; i < cellsX; i++) {
             const z00 = heights[j][i];
             const z10 = heights[j][i + 1];
             const z01 = heights[j + 1][i];
             const z11 = heights[j + 1][i + 1];
 
-            const dzdx = ((z10 - z00) + (z11 - z01)) * 0.5 / cellSizeMeters;
-            const dzdy = ((z01 - z00) + (z11 - z10)) * 0.5 / cellSizeMeters;
+            const dzdx = ((z10 - z00) + (z11 - z01)) * 0.5 / cellSizeEast;
+            const dzdy = ((z01 - z00) + (z11 - z10)) * 0.5 / cellSizeNorth;
 
             const downhillLocal = new Cesium.Cartesian3(-dzdx, -dzdy, 0.0);
             const downhillMag = Cesium.Cartesian3.magnitude(downhillLocal);
@@ -205,19 +325,28 @@
             }
             Cesium.Cartesian3.normalize(downhillLocal, downhillLocal);
 
-            const cellCenterEast = nodeOffsetStart + (i + 0.5) * cellSizeMeters;
-            const cellCenterNorth = nodeOffsetStart + (j + 0.5) * cellSizeMeters;
+            const cellCenterRectX = (i + 0.5) * cellSizeEast;
+            const cellCenterRectY = (j + 0.5) * cellSizeNorth;
             const cellCenterHeight = (z00 + z10 + z01 + z11) * 0.25;
 
-            const startLocal = new Cesium.Cartesian3(cellCenterEast, cellCenterNorth, cellCenterHeight - centerHeight + 0.2);
+            const cellCenterEnu = selectedRectangle.rectLocalToEnu(cellCenterRectX, cellCenterRectY, 0);
+            const downhillEnu2d = selectedRectangle.rectLocalToEnu(downhillLocal.x, downhillLocal.y, 0);
+            const downhillEnu = new Cesium.Cartesian3(downhillEnu2d.x, downhillEnu2d.y, 0);
+            Cesium.Cartesian3.normalize(downhillEnu, downhillEnu);
+
+            const startLocal = new Cesium.Cartesian3(
+              cellCenterEnu.x,
+              cellCenterEnu.y,
+              cellCenterHeight - baseHeight + 0.2
+            );
             const endLocal = new Cesium.Cartesian3(
-              cellCenterEast + downhillLocal.x * arrowScale,
-              cellCenterNorth + downhillLocal.y * arrowScale,
-              cellCenterHeight - centerHeight + 0.2
+              cellCenterEnu.x + downhillEnu.x * arrowScale,
+              cellCenterEnu.y + downhillEnu.y * arrowScale,
+              cellCenterHeight - baseHeight + 0.2
             );
 
-            const startWorld = Cesium.Matrix4.multiplyByPoint(enu, startLocal, new Cesium.Cartesian3());
-            const endWorld = Cesium.Matrix4.multiplyByPoint(enu, endLocal, new Cesium.Cartesian3());
+            const startWorld = selectedRectangle.enuToWorld(startLocal);
+            const endWorld = selectedRectangle.enuToWorld(endLocal);
 
             slopeArrowEntities.push(viewer.entities.add({
               polyline: {
@@ -240,6 +369,63 @@
     }
 
     visualizeBtn.addEventListener("click", visualizeSlopeVector);
+    clearVectorsBtn.addEventListener("click", function() {
+      clearSlopeVectors();
+      statusEl.textContent = "ベクトル表示を削除しました";
+    });
+
+    const clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    clickHandler.setInputAction(function(click) {
+      if (!viewer.terrainProvider || !viewer.terrainProvider.availability) {
+        statusEl.textContent = "地形データの読み込み完了後にクリックしてください";
+        return;
+      }
+
+      const pickedPosition = pickGroundPosition(click.position);
+      if (!Cesium.defined(pickedPosition)) {
+        statusEl.textContent = "Japan Regional Terrain の地表をクリックしてください";
+        return;
+      }
+
+      if (selectedCorners.length >= 3) {
+        clearRectangle();
+      }
+
+      selectedCorners.push(pickedPosition);
+      cornerPointEntities.push(viewer.entities.add({
+        position: pickedPosition,
+        point: {
+          pixelSize: 8,
+          color: Cesium.Color.LIME,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 1
+        }
+      }));
+
+      if (selectedCorners.length === 1) {
+        statusEl.textContent = "1点目を選択しました。2点目をクリックしてください";
+        return;
+      }
+      if (selectedCorners.length === 2) {
+        statusEl.textContent = "2点目を選択しました。3点目をクリックしてください";
+        return;
+      }
+
+      const rectDef = buildRectangleFromThreePoints(selectedCorners[0], selectedCorners[1], selectedCorners[2]);
+      if (!rectDef) {
+        const invalidMarker = cornerPointEntities.pop();
+        if (invalidMarker) {
+          viewer.entities.remove(invalidMarker);
+        }
+        selectedCorners.pop();
+        statusEl.textContent = "3点目が不正です。1辺から十分に離れた位置をクリックしてください";
+        return;
+      }
+
+      selectedRectangle = rectDef;
+      drawRectangleFromDefinition(rectDef);
+      statusEl.textContent = "長方形を作成しました。次の3点クリックで更新します";
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
   </script>
 </body>
 </html>
