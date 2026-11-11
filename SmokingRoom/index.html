@@ -1,0 +1,346 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIZCORE飯田橋から喫煙所へのご案内</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.127.0/Build/Cesium/Widgets/widgets.css">
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: "Yu Gothic UI", "Hiragino Kaku Gothic ProN", sans-serif;
+        }
+        html, body, #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+        #guide {
+            position: absolute;
+            z-index: 10;
+            top: 18px;
+            left: 18px;
+            width: min(340px, calc(100vw - 36px));
+            box-sizing: border-box;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, .14);
+            border-radius: 16px;
+            background: rgba(15, 23, 35, .92);
+            box-shadow: 0 14px 36px rgba(0, 0, 0, .35);
+            backdrop-filter: blur(12px);
+        }
+        h1 {
+            margin: 0 0 5px;
+            font-size: 20px;
+            line-height: 1.4;
+        }
+        .subtitle {
+            margin: 0 0 17px;
+            color: #a9b6c8;
+            font-size: 12px;
+        }
+        .summary {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 18px;
+            padding: 13px 14px;
+            border-radius: 11px;
+            background: rgba(67, 158, 255, .13);
+        }
+        .summary strong {
+            display: block;
+            color: #69b2ff;
+            font-size: 24px;
+        }
+        .summary span {
+            color: #c8d2df;
+            font-size: 12px;
+            line-height: 1.55;
+        }
+        .place {
+            display: grid;
+            grid-template-columns: 30px 1fr;
+            gap: 9px;
+            margin: 12px 0;
+            cursor: default;
+        }
+        .pin {
+            display: grid;
+            width: 27px;
+            height: 27px;
+            place-items: center;
+            border-radius: 50%;
+            background: #2389ff;
+            color: white;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .place.destination .pin {
+            background: #ff7043;
+        }
+        .place b {
+            display: block;
+            margin-bottom: 2px;
+            font-size: 16px;
+            line-height: 1.4;
+        }
+        .place small {
+            display: block;
+            color: #edf3ff;
+            font-size: 17px;
+            line-height: 1.5;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 17px;
+        }
+        button, .navigate {
+            box-sizing: border-box;
+            padding: 10px 8px;
+            border: 0;
+            border-radius: 8px;
+            background: #26364b;
+            color: #fff;
+            font: inherit;
+            font-size: 12px;
+            font-weight: 700;
+            text-align: center;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        button:hover, .navigate:hover {
+            background: #344963;
+        }
+        .navigate {
+            grid-column: 1 / -1;
+            background: #1684ff;
+        }
+        .navigate:hover {
+            background: #0874dc;
+        }
+        #status {
+            position: absolute;
+            z-index: 20;
+            right: 15px;
+            bottom: 34px;
+            padding: 8px 12px;
+            border-radius: 7px;
+            background: rgba(15, 23, 35, .88);
+            color: #dce5ef;
+            font-size: 11px;
+        }
+        @media (max-width: 600px) {
+            #guide {
+                top: 10px;
+                left: 10px;
+                width: calc(100vw - 20px);
+                padding: 15px;
+            }
+            h1 { font-size: 17px; }
+            .summary { margin-bottom: 12px; padding: 9px 12px; }
+            .summary strong { font-size: 20px; }
+            .place { margin: 8px 0; }
+        }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    <section id="guide" aria-label="喫煙所への案内">
+        <h1>喫煙所へのご案内</h1>
+        <p class="subtitle">BIZCORE飯田橋から使える喫煙所</p>
+        <div class="summary">
+            <strong id="distanceText">両方のルート</strong>
+            <span id="routeSummary">常時表示中<br>目白通り経由</span>
+        </div>
+
+        <div class="place" id="showStart">
+            <span class="pin">出</span>
+            <span><b>BIZCORE飯田橋</b></span>
+        </div>
+
+        <div class="place destination" id="showPureWood">
+            <span class="pin">着</span>
+            <span><b>ピュアウッドガーデン</b><small>営業時間：午前9時～午後2時</small></span>
+        </div>
+
+        <div class="place destination" id="showPaspa">
+            <span class="pin">着</span>
+            <span><b>paspa飯田橋東口</b><small>営業時間：午前7時～午後8時</small></span>
+        </div>
+
+        <div class="actions">
+            <a id="googleNavLink" class="navigate" href="https://www.google.com/maps/dir/?api=1&origin=35.699066,139.749374&destination=35.698795,139.750076&travelmode=walking" target="_blank" rel="noopener noreferrer">Google マップで徒歩ナビを開く</a>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/cesium@1.127.0/Build/Cesium/Cesium.js"></script>
+    <script>
+        Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
+
+        const start = { longitude: 139.749374, latitude: 35.699066 };
+        const smokingRooms = {
+            purewood: {
+                name: "ピュアウッドガーデン",
+                longitude: 139.750076,
+                latitude: 35.698795,
+                color: "#ff7b5d",
+                hours: "営業時間：午前9時～午後2時",
+                summary: "約95m<br>徒歩 約2分",
+                googleUrl: "https://www.google.com/maps/dir/?api=1&origin=35.699066,139.749374&destination=35.698795,139.750076&travelmode=walking",
+                route: [
+                    139.749306, 35.699025,
+                    139.749401, 35.698920,
+                    139.749687, 35.698633,
+                    139.749745, 35.698659,
+                    139.749989, 35.698768,
+                    139.750067, 35.698807
+                ]
+            },
+            paspa: {
+                name: "paspa飯田橋東口",
+                longitude: 139.748596,
+                latitude: 35.699478,
+                color: "#34c589",
+                hours: "営業時間：午前7時～午後8時",
+                summary: "約356m<br>徒歩 約6分",
+                googleUrl: "https://www.google.com/maps/dir/?api=1&origin=35.699066,139.749374&destination=35.699478,139.748596&travelmode=walking",
+                route: [
+                    139.749374, 35.699066,
+                    139.749300, 35.699120,
+                    139.749230, 35.699200,
+                    139.749100, 35.699250,
+                    139.748980, 35.699330,
+                    139.748860, 35.699420,
+                    139.748780, 35.699475,
+                    139.748730, 35.699491,
+                    139.748677, 35.699452,
+                    139.748646, 35.699430
+                ]
+            }
+        };
+
+        const viewer = new Cesium.Viewer("cesiumContainer", {
+            animation: false,
+            timeline: false,
+            baseLayerPicker: false,
+            geocoder: false,
+            homeButton: false,
+            sceneModePicker: false,
+            navigationHelpButton: false,
+            fullscreenButton: true,
+            infoBox: false,
+            selectionIndicator: false
+        });
+
+        viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+            url: "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+            credit: "&copy; OpenStreetMap contributors &copy; CARTO"
+        }));
+
+        viewer.scene.globe.depthTestAgainstTerrain = false;
+        viewer.scene.globe.enableLighting = false;
+
+        function addPlace(place, name, color, symbol) {
+            return viewer.entities.add({
+                name,
+                position: Cesium.Cartesian3.fromDegrees(place.longitude, place.latitude),
+                point: {
+                    pixelSize: 17,
+                    color: Cesium.Color.fromCssColorString(color),
+                    outlineColor: Cesium.Color.WHITE,
+                    outlineWidth: 4,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY
+                },
+                label: {
+                    text: symbol + "  " + name,
+                    font: "bold 15px sans-serif",
+                    fillColor: Cesium.Color.WHITE,
+                    showBackground: true,
+                    backgroundColor: Cesium.Color.fromCssColorString("#132033").withAlpha(0.88),
+                    backgroundPadding: new Cesium.Cartesian2(10, 7),
+                    pixelOffset: new Cesium.Cartesian2(0, -34),
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY
+                }
+            });
+        }
+
+        const routePolylines = {};
+        const routeSummary = document.getElementById("routeSummary");
+        const distanceText = document.getElementById("distanceText");
+        const googleNavLink = document.getElementById("googleNavLink");
+
+        function addRoute(key, room) {
+            const polyline = viewer.entities.add({
+                name: room.name,
+                polyline: {
+                    positions: Cesium.Cartesian3.fromDegreesArray(room.route),
+                    width: key === "purewood" ? 10 : 8,
+                    clampToGround: true,
+                    material: new Cesium.PolylineGlowMaterialProperty({
+                        color: Cesium.Color.fromCssColorString(key === "purewood" ? "#ff7b5d" : "#34c589"),
+                        glowPower: 0.18,
+                        taperPower: 0.4
+                    })
+                }
+            });
+            routePolylines[key] = polyline;
+        }
+
+        const startEntity = addPlace(start, "BIZCORE飯田橋", "#2389ff", "出");
+        const purewoodEntity = addPlace(smokingRooms.purewood, smokingRooms.purewood.name, smokingRooms.purewood.color, "着");
+        const paspaEntity = addPlace(smokingRooms.paspa, smokingRooms.paspa.name, smokingRooms.paspa.color, "着");
+
+        addRoute("purewood", smokingRooms.purewood);
+        addRoute("paspa", smokingRooms.paspa);
+
+        function fitToRoutes() {
+            const routePoints = [];
+            routePoints.push(start.longitude, start.latitude);
+            Object.values(smokingRooms).forEach((room) => {
+                routePoints.push(room.longitude, room.latitude);
+                room.route.forEach((value, index) => {
+                    if (index % 2 === 0) {
+                        routePoints.push(value, room.route[index + 1]);
+                    }
+                });
+            });
+
+            const cartesianPoints = Cesium.Cartesian3.fromDegreesArray(routePoints);
+            const boundingSphere = Cesium.BoundingSphere.fromPoints(cartesianPoints);
+            const distance = Math.max(260, Math.min(650, boundingSphere.radius * 5.5));
+
+            viewer.camera.flyToBoundingSphere(boundingSphere, {
+                duration: 1.7,
+                offset: new Cesium.HeadingPitchRange(
+                    Cesium.Math.toRadians(0),
+                    Cesium.Math.toRadians(-35),
+                    distance
+                )
+            });
+        }
+
+        Object.entries(routePolylines).forEach(([routeKey, entity]) => {
+            entity.polyline.width = 6;
+            entity.polyline.material = new Cesium.PolylineGlowMaterialProperty({
+                color: Cesium.Color.fromCssColorString(smokingRooms[routeKey].color),
+                glowPower: 0.18,
+                taperPower: 0.5
+            });
+        });
+
+        distanceText.innerHTML = "両方のルート";
+        routeSummary.innerHTML = "常時表示中<br>目白通り経由";
+        googleNavLink.href = smokingRooms.purewood.googleUrl;
+
+        fitToRoutes();
+    </script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>富士登山競争 5合目コース</title>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+    <style>
+        html, body, #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #infoPanel {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            background: rgba(10, 20, 40, 0.85);
+            color: #fff;
+            padding: 16px 20px;
+            border-radius: 8px;
+            border: 1px solid rgba(100, 160, 255, 0.4);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            z-index: 100;
+            font-family: 'Hiragino Kaku Gothic Pro', 'メイリオ', sans-serif;
+            min-width: 220px;
+        }
+        #infoPanel h2 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #7fc4ff;
+            letter-spacing: 1px;
+        }
+        #infoPanel p {
+            margin: 4px 0;
+            font-size: 12px;
+            color: #c8deff;
+            line-height: 1.6;
+        }
+        #infoPanel .stat {
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px solid rgba(100,160,255,0.2);
+            margin-top: 8px;
+            padding-top: 8px;
+            gap: 16px;
+        }
+        #infoPanel .stat-item {
+            text-align: center;
+        }
+        #infoPanel .stat-value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #ffdd66;
+        }
+        #infoPanel .stat-label {
+            font-size: 10px;
+            color: #99b8dd;
+        }
+
+        #viewButtons {
+            position: absolute;
+            bottom: 80px;
+            left: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 100;
+        }
+        .viewBtn {
+            background: rgba(10, 20, 40, 0.85);
+            color: #7fc4ff;
+            border: 1px solid rgba(100, 160, 255, 0.4);
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: 'Hiragino Kaku Gothic Pro', 'メイリオ', sans-serif;
+            transition: background 0.2s;
+        }
+        .viewBtn:hover {
+            background: rgba(30, 60, 100, 0.9);
+        }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+
+    <div id="infoPanel">
+        <h2>富士登山競争 5合目コース</h2>
+        <p>吉田口スタート → 佐藤小屋（旧5合目）</p>
+        <div class="stat">
+            <div class="stat-item">
+                <div class="stat-value">15 km</div>
+                <div class="stat-label">距離</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">+1,500 m</div>
+                <div class="stat-label">累積獲得標高</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">2,230 m</div>
+                <div class="stat-label">ゴール標高</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="viewButtons">
+        <button class="viewBtn" onclick="flyToLookUp()">▲ 見上げる視点</button>
+        <button class="viewBtn" onclick="flyToOverview()">◎ コース全体</button>
+        <button class="viewBtn" onclick="flyToSengen()">⛩ 浅間神社</button>
+        <button class="viewBtn" onclick="flyToNakanochaya()">🏕 中ノ茶屋</button>
+        <button class="viewBtn" onclick="flyToGoal()">★ ゴール付近</button>
+    </div>
+
+    <script>
+        // Cesium Ion アクセストークン（必要に応じて設定）
+        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o';
+
+        // ======================================================
+        // 富士登山競争5合目コース ウェイポイント（吉田口ルート）
+        // ======================================================
+        // [経度, 緯度, 標高(m)]
+        const courseWaypoints = [
+            // スタート：富士吉田市役所
+            [138.8094, 35.4918,  820],
+            // 西北西：中央会館前交差点（市役所に近い）
+            [138.8005, 35.4928,  821],
+            // 北口本宮冨士浅間神社
+            [138.7893, 35.4718,  905],
+            // 浅間神社〜中ノ茶屋の中間
+            [138.7820, 35.4600,  980],
+            // 中ノ茶屋
+            [138.7730, 35.4480, 1100],
+            // 中ノ茶屋〜馬返しの中間
+            [138.7680, 35.4390, 1210],
+            // 馬返し
+            [138.7635, 35.4300, 1445],
+            [138.7580, 35.4200, 1580],
+            [138.7530, 35.4100, 1700],
+            // 一合目
+            [138.7500, 35.4010, 1820],
+            // 二合目
+            [138.7465, 35.3940, 1940],
+            // 三合目
+            [138.7432, 35.3870, 2040],
+            [138.7400, 35.3820, 2130],
+            // 四合目
+            [138.7370, 35.3770, 2210],
+            // ゴール：佐藤小屋（吉田口旧5合目）
+            [138.7399, 35.3839, 2230],
+        ];
+
+        // Cesium.Cartesian3 の配列に変換
+        const coursePositions = courseWaypoints.map(([lng, lat, alt]) =>
+            Cesium.Cartesian3.fromDegrees(lng, lat, alt)
+        );
+
+        // ======================================================
+        // Viewer 初期化
+        // ======================================================
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            terrain: new Cesium.Terrain(
+                Cesium.CesiumTerrainProvider.fromIonAssetId(2767062, {
+                    requestVertexNormals: true,
+                })
+            ),
+            baseLayerPicker: false,
+            geocoder: false,
+            homeButton: false,
+            sceneModePicker: false,
+            navigationHelpButton: false,
+            animation: false,
+            timeline: false,
+            fullscreenButton: true,
+            shadows: true,
+            terrainShadows: Cesium.ShadowMode.ENABLED,
+        });
+
+        const scene = viewer.scene;
+        scene.globe.enableLighting = true;
+        scene.globe.depthTestAgainstTerrain = true;
+
+        // 大気・フォグ設定（晴れた夏の昼間）
+        scene.skyAtmosphere.hueShift = 0.0;
+        scene.skyAtmosphere.saturationShift = 0.2;
+        scene.skyAtmosphere.brightnessShift = 0.1;
+        scene.fog.enabled = true;
+        scene.fog.density = 0.00005;
+
+        // 晴れた昼間（7月27日 正午）
+        const raceDay = Cesium.JulianDate.fromDate(new Date('2025-07-27T12:00:00+09:00'));
+        viewer.clock.currentTime = raceDay;
+        viewer.clock.shouldAnimate = false;
+
+        // ======================================================
+        // コースルート描画
+        // ======================================================
+
+        // メインルートライン（グラデーション効果のため複数セグメントに分割）
+        const segmentCount = coursePositions.length - 1;
+        for (let i = 0; i < segmentCount; i++) {
+            const t = i / (segmentCount - 1);
+            // 標高に応じた色変化: 低地=緑、中間=黄、高地=赤
+            const r = Math.min(1.0, t * 2.0);
+            const g = t < 0.5 ? 1.0 : 2.0 - t * 2.0;
+            const b = 0.1;
+            viewer.entities.add({
+                polyline: {
+                    positions: [coursePositions[i], coursePositions[i + 1]],
+                    width: 5,
+                    material: new Cesium.PolylineGlowMaterialProperty({
+                        glowPower: 0.3,
+                        color: new Cesium.Color(r, g, b, 1.0),
+                    }),
+                    clampToGround: false,
+                    depthFailMaterial: new Cesium.ColorMaterialProperty(
+                        new Cesium.Color(r, g, b, 0.4)
+                    ),
+                }
+            });
+        }
+
+        // ======================================================
+        // チェックポイントマーカー
+        // ======================================================
+        const checkpoints = [
+            { idx: 0,  label: 'START\n富士吉田市役所',              color: Cesium.Color.LIME,   scale: 1.4 },
+            { idx: 1,  label: '中央会館前交差点',                    color: Cesium.Color.CYAN,   scale: 0.9 },
+            { idx: 2,  label: '北口本宮\n冨士浅間神社',              color: Cesium.Color.AQUA,   scale: 1.1 },
+            { idx: 4,  label: '中ノ茶屋\n標高 1,100m',              color: Cesium.Color.YELLOW, scale: 1.0 },
+            { idx: 6,  label: '馬返し\n標高 1,445m',                color: Cesium.Color.YELLOW, scale: 1.0 },
+            { idx: 10, label: '二合目\n標高 1,940m',                color: Cesium.Color.YELLOW, scale: 1.0 },
+            { idx: 11, label: '三合目\n標高 2,040m',                color: Cesium.Color.ORANGE, scale: 1.0 },
+            { idx: 14, label: 'GOAL\n佐藤小屋\n標高 2,230m',       color: Cesium.Color.RED,    scale: 1.6 },
+        ];
+
+        checkpoints.forEach(cp => {
+            const pos = coursePositions[cp.idx];
+            const wp  = courseWaypoints[cp.idx];
+
+            // ピンマーカー
+            viewer.entities.add({
+                position: pos,
+                billboard: {
+                    image: createPinCanvas(cp.color),
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    heightReference: Cesium.HeightReference.NONE,
+                    scale: cp.scale,
+                    disableDepthTestDistance: 5000,
+                },
+                label: {
+                    text: cp.label,
+                    font: '13px "Hiragino Kaku Gothic Pro", メイリオ, sans-serif',
+                    fillColor: Cesium.Color.WHITE,
+                    outlineColor: Cesium.Color.BLACK,
+                    outlineWidth: 3,
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset: new Cesium.Cartesian2(0, -60 * cp.scale),
+                    heightReference: Cesium.HeightReference.NONE,
+                    disableDepthTestDistance: 5000,
+                    scale: 0.9,
+                }
+            });
+        });
+
+        // ピンアイコン生成
+        function createPinCanvas(color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 44;
+            const ctx = canvas.getContext('2d');
+            const r = color.red   * 255 | 0;
+            const g = color.green * 255 | 0;
+            const b = color.blue  * 255 | 0;
+            const fillStyle = `rgb(${r},${g},${b})`;
+            ctx.beginPath();
+            ctx.arc(16, 16, 14, 0, Math.PI * 2);
+            ctx.fillStyle = fillStyle;
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(16, 30);
+            ctx.lineTo(9, 42);
+            ctx.lineTo(23, 42);
+            ctx.closePath();
+            ctx.fillStyle = fillStyle;
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            return canvas;
+        }
+
+        // ======================================================
+        // カメラビュー定義
+        // ======================================================
+
+        // 見上げる視点：吉田口中腹あたりから山頂方向を見上げる
+        function flyToLookUp() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(138.7800, 35.4300, 1500),
+                orientation: {
+                    heading: Cesium.Math.toRadians(220),  // 南西（山頂方向）
+                    pitch:   Cesium.Math.toRadians(-8),   // やや上を見る
+                    roll:    0,
+                },
+                duration: 3,
+            });
+        }
+
+        // コース全体俯瞰
+        function flyToOverview() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(138.770, 35.445, 12000),
+                orientation: {
+                    heading: Cesium.Math.toRadians(180),
+                    pitch:   Cesium.Math.toRadians(-40),
+                    roll:    0,
+                },
+                duration: 3,
+            });
+        }
+
+        // 北口本宮冨士浅間神社
+        function flyToSengen() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(138.7920, 35.4760, 1100),
+                orientation: {
+                    heading: Cesium.Math.toRadians(195),
+                    pitch:   Cesium.Math.toRadians(-18),
+                    roll:    0,
+                },
+                duration: 3,
+            });
+        }
+
+        // 中ノ茶屋
+        function flyToNakanochaya() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(138.7760, 35.4530, 1400),
+                orientation: {
+                    heading: Cesium.Math.toRadians(205),
+                    pitch:   Cesium.Math.toRadians(-15),
+                    roll:    0,
+                },
+                duration: 3,
+            });
+        }
+
+        // ゴール付近（佐藤小屋）
+        function flyToGoal() {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(138.7450, 35.3900, 2700),
+                orientation: {
+                    heading: Cesium.Math.toRadians(200),
+                    pitch:   Cesium.Math.toRadians(-20),
+                    roll:    0,
+                },
+                duration: 3,
+            });
+        }
+
+        // ======================================================
+        // 初期カメラ：山麓から見上げるアングル
+        // ======================================================
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(138.795, 35.455, 1100),
+            orientation: {
+                heading: Cesium.Math.toRadians(210),
+                pitch:   Cesium.Math.toRadians(-5),
+                roll:    0,
+            },
+            duration: 0,
+        });
+
+        // ロード後にアニメーションで見上げ視点へ移動
+        setTimeout(() => {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(138.790, 35.450, 1050),
+                orientation: {
+                    heading: Cesium.Math.toRadians(215),
+                    pitch:   Cesium.Math.toRadians(-6),
+                    roll:    0,
+                },
+                duration: 4,
+                easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+            });
+        }, 1500);
+
+    </script>
+</body>
+</html>

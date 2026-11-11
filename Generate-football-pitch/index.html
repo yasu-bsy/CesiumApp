@@ -54,6 +54,32 @@
             transition: background 0.2s;
         }
         #clearBtn:hover { background: #455A64; }
+        #dimsPanel {
+            background: rgba(255,255,255,0.92);
+            border-radius: 6px;
+            padding: 8px 10px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        #dimsPanel label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        #dimsPanel input[type="number"] {
+            width: 70px;
+            padding: 3px 6px;
+            border: 1px solid #90A4AE;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        #dimsPanel .checkboxRow {
+            justify-content: flex-start;
+        }
         #status {
             position: absolute;
             bottom: 40px;
@@ -73,6 +99,11 @@
 <body>
     <div id="cesiumContainer"></div>
     <div id="toolbar">
+        <div id="dimsPanel">
+            <label>縦(長辺) L: <input type="number" id="pitchLengthInput" value="68" min="10" max="200" step="0.5"> m</label>
+            <label>横(短辺) W: <input type="number" id="pitchWidthInput" value="50" min="10" max="200" step="0.5"> m</label>
+            <label class="checkboxRow"><input type="checkbox" id="dimLinesToggle" checked> 寸法線を表示</label>
+        </div>
         <button id="createPitchBtn">ピッチ作成</button>
         <button id="clearBtn">クリア</button>
     </div>
@@ -105,25 +136,22 @@
         });
 
         // ─── Pitch dimensions (meters) ───────────────────────────────────────
-        const PITCH_L = 68;   // long side  (x-axis in local coords)
-        const PITCH_W = 50;   // short side (y-axis in local coords)
+        // PITCH_L / PITCH_W are editable at runtime via the size inputs in the
+        // toolbar (see #pitchLengthInput / #pitchWidthInput below), so they are
+        // declared with `let` instead of `const`.
+        let PITCH_L = 68;   // long side  (x-axis in local coords)
+        let PITCH_W = 50;   // short side (y-axis in local coords)
 
         // Penalty area
         const PA_DEPTH = 12;                            // from goal line along x
-        const PA_WIDTH = 29;                            // centered on y=25
-        const PA_Y0    = (PITCH_W - PA_WIDTH) / 2;     // = 10.5
-        const PA_Y1    = PA_Y0 + PA_WIDTH;              // = 39.5
+        const PA_WIDTH = 29;                            // centered on y=PITCH_W/2
 
         // Goal area
         const GA_DEPTH = 4;                             // from goal line along x
         const GA_WIDTH = 13;                            // goal area width
-        const GA_Y0    = (PITCH_W - GA_WIDTH) / 2;     // = 16
-        const GA_Y1    = GA_Y0 + GA_WIDTH;              // = 34
 
         // Goal mouth (for visual reference lines only – not a 3-D structure)
         const GOAL_WIDTH = 5;
-        const GOAL_Y0    = (PITCH_W - GOAL_WIDTH) / 2; // = 21
-        const GOAL_Y1    = GOAL_Y0 + GOAL_WIDTH;        // = 29
 
         // Spots & circles
         const PEN_SPOT_X  = 8;   // penalty spot from goal line
@@ -137,6 +165,18 @@
 
         // Stripe count along long axis
         const STRIPE_N = 8;
+
+        // Dimension-line style
+        const DIM_COLOR     = Cesium.Color.fromCssColorString("#ffd600"); // amber
+        const DIM_EXT_COLOR = Cesium.Color.fromCssColorString("#ffd600").withAlpha(0.55);
+        const DIM_TICK_LEN  = 1.2; // meters, length of the end tick marks
+
+        // zIndex layering for ground-clamped primitives (higher draws on top,
+        // avoids dimension lines being hidden behind the grass/markings).
+        const Z_STRIPE = 0;
+        const Z_MARKING = 1;
+        const Z_DIMENSION = 10;
+
 
         // ─── State ───────────────────────────────────────────────────────────
         let clickMode  = false;
@@ -152,6 +192,10 @@
         const statusEl = document.getElementById("status");
         const btn      = document.getElementById("createPitchBtn");
         const clearBtn = document.getElementById("clearBtn");
+        const lengthInput = document.getElementById("pitchLengthInput");
+        const widthInput  = document.getElementById("pitchWidthInput");
+        const dimLinesToggle = document.getElementById("dimLinesToggle");
+        let showDimensions = dimLinesToggle.checked;
 
         // ─── UI helpers ──────────────────────────────────────────────────────
         function setStatus(msg) {
@@ -320,6 +364,37 @@
             clearPitch();
         });
 
+        // ─── Pitch size inputs ───────────────────────────────────────────────
+        function applyPitchSize(input, min, apply) {
+            const value = parseFloat(input.value);
+            if (!Number.isFinite(value) || value < min) {
+                input.value = String(min);
+                apply(min);
+            } else {
+                apply(value);
+            }
+            // Redraw the current pitch in place (without moving the camera)
+            // so size changes are reflected immediately.
+            if (currentPitchBasis) {
+                renderPitch(currentPitchBasis, false);
+            }
+        }
+
+        lengthInput.addEventListener("change", () => {
+            applyPitchSize(lengthInput, 10, v => { PITCH_L = v; });
+        });
+
+        widthInput.addEventListener("change", () => {
+            applyPitchSize(widthInput, 10, v => { PITCH_W = v; });
+        });
+
+        dimLinesToggle.addEventListener("change", () => {
+            showDimensions = dimLinesToggle.checked;
+            if (currentPitchBasis) {
+                renderPitch(currentPitchBasis, false);
+            }
+        });
+
         // ─── Click handler ───────────────────────────────────────────────────
         viewer.screenSpaceEventHandler.setInputAction(click => {
             if (!clickMode) return;
@@ -450,7 +525,7 @@
         }
 
         /** Add a polyline entity clamped to ground. */
-        function addLine(positions, color, width) {
+        function addLine(positions, color, width, zIndex) {
             const e = viewer.entities.add({
                 polyline: {
                     positions,
@@ -458,6 +533,7 @@
                     material: color || Cesium.Color.WHITE,
                     clampToGround: true,
                     classificationType: Cesium.ClassificationType.TERRAIN,
+                    zIndex: zIndex || 0,
                 }
             });
             pitchEntities.push(e);
@@ -465,20 +541,92 @@
         }
 
         /** Add a filled polygon entity clamped to ground. */
-        function addPolygon(positions, color) {
+        function addPolygon(positions, color, zIndex) {
             const e = viewer.entities.add({
                 polygon: {
                     hierarchy: new Cesium.PolygonHierarchy(positions),
                     material: color,
                     classificationType: Cesium.ClassificationType.TERRAIN,
                     heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    zIndex: zIndex || 0,
                 }
             });
             pitchEntities.push(e);
             return e;
         }
 
-        // ─── Draw pitch ──────────────────────────────────────────────────────
+        // ─── Dimension lines (CAD-style: extension lines + end ticks + label) ─
+        /** Add a text label (with white background) clamped to the ground. */
+        function addDimLabel(x, y, text, basis) {
+            const e = viewer.entities.add({
+                position: local2world(x, y, basis),
+                label: {
+                    text,
+                    font: "bold 14px sans-serif",
+                    fillColor: Cesium.Color.BLACK,
+                    showBackground: true,
+                    backgroundColor: Cesium.Color.WHITE.withAlpha(0.8),
+                    backgroundPadding: new Cesium.Cartesian2(4, 2),
+                    style: Cesium.LabelStyle.FILL,
+                    verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 4000, 0.35),
+                }
+            });
+            pitchEntities.push(e);
+            return e;
+        }
+
+        /**
+         * Draw a linear dimension between local points p1 → p2, offset away
+         * from the measured feature by `offset` (a local [dx, dy] vector, in
+         * meters), with extension lines, end ticks and a text label.
+         * `labelFrac` (0..1) positions the label along the line; defaults to
+         * the midpoint, but can be shifted so nested/stacked dimensions that
+         * share the same centre don't overlap each other's labels.
+         */
+        function addLinearDimension(p1, p2, offset, text, basis, labelFrac) {
+            const frac = labelFrac === undefined ? 0.5 : labelFrac;
+            const d1 = [p1[0] + offset[0], p1[1] + offset[1]];
+            const d2 = [p2[0] + offset[0], p2[1] + offset[1]];
+
+            // Extension lines connecting the real points to the offset dimension line
+            addLine(localLine([p1, d1], basis), DIM_EXT_COLOR, 1, Z_DIMENSION);
+            addLine(localLine([p2, d2], basis), DIM_EXT_COLOR, 1, Z_DIMENSION);
+
+            // Main dimension line
+            addLine(localLine([d1, d2], basis), DIM_COLOR, LW, Z_DIMENSION);
+
+            // Perpendicular end ticks
+            const dx = d2[0] - d1[0], dy = d2[1] - d1[1];
+            const len = Math.hypot(dx, dy) || 1;
+            const px = -dy / len, py = dx / len; // unit perpendicular
+            const h = DIM_TICK_LEN / 2;
+            [d1, d2].forEach(d => {
+                addLine(localLine([
+                    [d[0] + px * h, d[1] + py * h],
+                    [d[0] - px * h, d[1] - py * h],
+                ], basis), DIM_COLOR, LW, Z_DIMENSION);
+            });
+
+            // Label positioned along the line (defaults to the midpoint)
+            const mid = [d1[0] + (d2[0] - d1[0]) * frac, d1[1] + (d2[1] - d1[1]) * frac];
+            addDimLabel(mid[0], mid[1], text, basis);
+        }
+
+        /** Draw a radial dimension (centre → edge) for an arc/circle, with a label near the tip. */
+        function addRadialDimension(cx, cy, r, angle, text, basis) {
+            const ex = cx + r * Math.cos(angle);
+            const ey = cy + r * Math.sin(angle);
+            addLine(localLine([[cx, cy], [ex, ey]], basis), DIM_COLOR, LW, Z_DIMENSION);
+            const lx = cx + (r + 1.5) * Math.cos(angle);
+            const ly = cy + (r + 1.5) * Math.sin(angle);
+            addDimLabel(lx, ly, text, basis);
+        }
+
+
         function renderPitch(basis, flyCamera) {
             clearPitch();
             currentPitchBasis = {
@@ -486,6 +634,13 @@
                 V: Cesium.Cartesian3.clone(basis.V),
                 origin: Cesium.Cartesian3.clone(basis.origin),
             };
+
+            // Width-dependent marking positions, recomputed from the current
+            // PITCH_W so edits to the size inputs take effect immediately.
+            const PA_Y0 = (PITCH_W - PA_WIDTH) / 2;
+            const PA_Y1 = PA_Y0 + PA_WIDTH;
+            const GA_Y0 = (PITCH_W - GA_WIDTH) / 2;
+            const GA_Y1 = GA_Y0 + GA_WIDTH;
 
             // ── Background: alternating green stripes ──
             const stripeW = PITCH_L / STRIPE_N;
@@ -500,7 +655,7 @@
                     local2world(x1, 0,       basis),
                     local2world(x1, PITCH_W, basis),
                     local2world(x0, PITCH_W, basis),
-                ], col);
+                ], col, Z_STRIPE);
             }
 
             // ── Outer boundary ──
@@ -510,35 +665,35 @@
                 local2world(PITCH_L, PITCH_W, basis),
                 local2world(0,       PITCH_W, basis),
                 local2world(0,       0,       basis),
-            ], Cesium.Color.WHITE, LW_THICK);
+            ], Cesium.Color.WHITE, LW_THICK, Z_MARKING);
 
             // ── Centre line ──
             addLine([
                 local2world(PITCH_L / 2, 0,       basis),
                 local2world(PITCH_L / 2, PITCH_W, basis),
-            ], Cesium.Color.WHITE, LW);
+            ], Cesium.Color.WHITE, LW, Z_MARKING);
 
             // ── Centre circle ──
             addLine(
                 arcPoints(PITCH_L / 2, PITCH_W / 2, CENTER_R, 0, Math.PI * 2, 64, basis),
-                Cesium.Color.WHITE, LW
+                Cesium.Color.WHITE, LW, Z_MARKING
             );
 
             // ── Centre spot ──
             addLine(
                 arcPoints(PITCH_L / 2, PITCH_W / 2, 0.4, 0, Math.PI * 2, 16, basis),
-                Cesium.Color.WHITE, 3
+                Cesium.Color.WHITE, 3, Z_MARKING
             );
 
             // ── Corner arcs ──
             // bottom-left (0,0): arc from 0° to 90°
-            addLine(arcPoints(0,       0,       CORNER_R, 0,            Math.PI / 2,     12, basis), Cesium.Color.WHITE, LW);
+            addLine(arcPoints(0,       0,       CORNER_R, 0,            Math.PI / 2,     12, basis), Cesium.Color.WHITE, LW, Z_MARKING);
             // bottom-right (L,0): arc from 90° to 180°
-            addLine(arcPoints(PITCH_L, 0,       CORNER_R, Math.PI / 2,  Math.PI,         12, basis), Cesium.Color.WHITE, LW);
+            addLine(arcPoints(PITCH_L, 0,       CORNER_R, Math.PI / 2,  Math.PI,         12, basis), Cesium.Color.WHITE, LW, Z_MARKING);
             // top-right (L,W): arc from 180° to 270°
-            addLine(arcPoints(PITCH_L, PITCH_W, CORNER_R, Math.PI,      Math.PI * 3 / 2, 12, basis), Cesium.Color.WHITE, LW);
+            addLine(arcPoints(PITCH_L, PITCH_W, CORNER_R, Math.PI,      Math.PI * 3 / 2, 12, basis), Cesium.Color.WHITE, LW, Z_MARKING);
             // top-left (0,W): arc from 270° to 360°
-            addLine(arcPoints(0,       PITCH_W, CORNER_R, Math.PI * 3 / 2, Math.PI * 2,  12, basis), Cesium.Color.WHITE, LW);
+            addLine(arcPoints(0,       PITCH_W, CORNER_R, Math.PI * 3 / 2, Math.PI * 2,  12, basis), Cesium.Color.WHITE, LW, Z_MARKING);
 
             // ─── LEFT END ────────────────────────────────────────────────────
 
@@ -548,7 +703,7 @@
                 [PA_DEPTH, PA_Y0],
                 [PA_DEPTH, PA_Y1],
                 [0,        PA_Y1],
-            ], basis), Cesium.Color.WHITE, LW);
+            ], basis), Cesium.Color.WHITE, LW, Z_MARKING);
 
             // Left goal area
             addLine(localLine([
@@ -556,12 +711,12 @@
                 [GA_DEPTH, GA_Y0],
                 [GA_DEPTH, GA_Y1],
                 [0,        GA_Y1],
-            ], basis), Cesium.Color.WHITE, LW);
+            ], basis), Cesium.Color.WHITE, LW, Z_MARKING);
 
             // Left penalty spot
             addLine(
                 arcPoints(PEN_SPOT_X, PITCH_W / 2, 0.4, 0, Math.PI * 2, 16, basis),
-                Cesium.Color.WHITE, 3
+                Cesium.Color.WHITE, 3, Z_MARKING
             );
 
             // Left penalty arc (part of circle outside penalty area, i.e. x > PA_DEPTH)
@@ -570,7 +725,7 @@
                 const half = Math.acos(dx / PEN_ARC_R);  // half-angle of arc chord
                 addLine(
                     arcPoints(PEN_SPOT_X, PITCH_W / 2, PEN_ARC_R, -half, half, 32, basis),
-                    Cesium.Color.WHITE, LW
+                    Cesium.Color.WHITE, LW, Z_MARKING
                 );
             }
 
@@ -583,7 +738,7 @@
                 [PITCH_L - PA_DEPTH, PA_Y0],
                 [PITCH_L - PA_DEPTH, PA_Y1],
                 [PITCH_L,           PA_Y1],
-            ], basis), Cesium.Color.WHITE, LW);
+            ], basis), Cesium.Color.WHITE, LW, Z_MARKING);
 
             // Right goal area
             addLine(localLine([
@@ -591,12 +746,12 @@
                 [PITCH_L - GA_DEPTH, GA_Y0],
                 [PITCH_L - GA_DEPTH, GA_Y1],
                 [PITCH_L,           GA_Y1],
-            ], basis), Cesium.Color.WHITE, LW);
+            ], basis), Cesium.Color.WHITE, LW, Z_MARKING);
 
             // Right penalty spot
             addLine(
                 arcPoints(RP, PITCH_W / 2, 0.4, 0, Math.PI * 2, 16, basis),
-                Cesium.Color.WHITE, 3
+                Cesium.Color.WHITE, 3, Z_MARKING
             );
 
             // Right penalty arc (x < PITCH_L - PA_DEPTH)
@@ -606,8 +761,38 @@
                 // Arc faces left (toward x < PITCH_L - PA_DEPTH), so angles around π
                 addLine(
                     arcPoints(RP, PITCH_W / 2, PEN_ARC_R, Math.PI - half, Math.PI + half, 32, basis),
-                    Cesium.Color.WHITE, LW
+                    Cesium.Color.WHITE, LW, Z_MARKING
                 );
+            }
+
+            // ─── Dimension lines ─────────────────────────────────────────────
+            if (showDimensions) {
+                const CX = PITCH_L / 2, CY = PITCH_W / 2;
+
+                // Stack of spans measured along the x-axis (depth into the pitch),
+                // offset outward beyond the y=0 touchline (negative y). These
+                // spans start at different lengths (GA_DEPTH < PA_DEPTH <
+                // PITCH_L), so their midpoints naturally don't collide.
+                addLinearDimension([0, 0], [GA_DEPTH, 0], [0, -3],  `${GA_DEPTH}m`, basis);
+                addLinearDimension([0, 0], [PA_DEPTH, 0], [0, -8],  `${PA_DEPTH}m`, basis);
+                addLinearDimension([0, 0], [PITCH_L, 0],  [0, -14], `${PITCH_L}m`, basis);
+
+                // Stack of spans measured along the y-axis (pitch width),
+                // offset outward beyond the x=0 goal line (negative x).
+                // Label positions are staggered (labelFrac) because all three
+                // spans share the same centre (PITCH_W / 2) and would
+                // otherwise overlap.
+                addLinearDimension([0, GA_Y0], [0, GA_Y1], [-3, 0],  `${GA_WIDTH}m`, basis, 0.5);
+                addLinearDimension([0, PA_Y0], [0, PA_Y1], [-8, 0],  `${PA_WIDTH}m`, basis, 0.22);
+                addLinearDimension([0, 0], [0, PITCH_W],   [-14, 0], `${PITCH_W}m`, basis, 0.78);
+
+                // Penalty spot distance from the goal line
+                addLinearDimension([0, CY], [PEN_SPOT_X, CY], [0, -2], `${PEN_SPOT_X}m`, basis);
+
+                // Radii
+                addRadialDimension(PEN_SPOT_X, CY, PEN_ARC_R, Cesium.Math.toRadians(45), `R${PEN_ARC_R}m`, basis);
+                addRadialDimension(CX, CY, CENTER_R, Cesium.Math.toRadians(135), `R${CENTER_R}m`, basis);
+                addRadialDimension(0, 0, CORNER_R, Cesium.Math.toRadians(45), `R${CORNER_R}m`, basis);
             }
 
             // ── Fly to pitch ──
