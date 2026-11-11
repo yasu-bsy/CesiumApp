@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Hanshin Expressway (Umeda - Ikeda)</title>
+	<script src="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Cesium.js"></script>
+	<link
+		href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css"
+		rel="stylesheet"
+	/>
+	<style>
+		html,
+		body,
+		#cesiumContainer {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			padding: 0;
+			overflow: hidden;
+			font-family: "Yu Gothic UI", "Yu Gothic", sans-serif;
+		}
+
+		.overlay {
+			position: absolute;
+			top: 12px;
+			left: 12px;
+			z-index: 10;
+			background: rgba(20, 30, 43, 0.85);
+			color: #ffffff;
+			padding: 10px 12px;
+			border-radius: 8px;
+			max-width: 360px;
+			line-height: 1.45;
+			font-size: 13px;
+		}
+
+		.overlay strong {
+			display: block;
+			margin-bottom: 4px;
+			font-size: 14px;
+		}
+
+		.export-actions {
+			margin-top: 10px;
+			display: flex;
+			gap: 8px;
+			flex-wrap: wrap;
+		}
+
+		.export-actions button {
+			border: 0;
+			border-radius: 6px;
+			padding: 8px 10px;
+			font-size: 12px;
+			font-weight: 700;
+			cursor: pointer;
+			background: #ff9f1c;
+			color: #1a1a1a;
+		}
+
+		.export-actions button.secondary {
+			background: #7bdff2;
+		}
+
+		.export-hint {
+			margin-top: 8px;
+			font-size: 11px;
+			opacity: 0.9;
+		}
+	</style>
+</head>
+<body>
+	<div id="cesiumContainer"></div>
+	<div class="overlay">
+		<strong>阪神高速（梅田〜池田）</strong>
+		添付路線図を参考に、梅田〜池田と梅田〜天王寺の概略ルートを可視化しています。
+		<div class="export-actions">
+			<button id="exportGeoJsonBtn" type="button">GeoJSONを書き出し</button>
+			<button id="exportCzmlBtn" class="secondary" type="button">CZMLを書き出し</button>
+		</div>
+		<div class="export-hint">書き出したファイルをCesium ionにアップロードすると、Cesium Storiesで利用できます。</div>
+	</div>
+
+	<script>
+		Cesium.Ion.defaultAccessToken =
+			"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiOGQ2OThiZS1hZDkzLTQ4MjktYTZjMC0zZTJiOTZkOWI2OWQiLCJpZCI6MjUyOTUyLCJzdWIiOiJZYXN1c2hpIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IlRyZWUgUmlzayBBc3Nlc3NtZW50IiwiaWF0IjoxNzgxMjQzNzk5fQ.ZXeoSgsZYAA5dt2EmqdxAhRY8XUCUZQ7viJKCOASc5o";
+
+		const viewer = new Cesium.Viewer("cesiumContainer", {
+			timeline: false,
+			animation: false,
+			baseLayerPicker: true,
+			geocoder: false,
+			sceneModePicker: true,
+			homeButton: true,
+			navigationHelpButton: false,
+			shouldAnimate: false,
+			terrain: Cesium.Terrain.fromWorldTerrain()
+		});
+
+		viewer.scene.globe.depthTestAgainstTerrain = true;
+
+		// 梅田から池田方面へ向かう阪神高速11号池田線の概略点列
+		const routeIkedaLonLat = [
+			135.4983, 34.7056, // 梅田
+			135.4926, 34.7122, // 中津付近
+			135.4848, 34.7268, // 十三付近
+			135.4762, 34.7448, // 三国付近
+			135.4688, 34.7588, // 庄内付近
+			135.4591, 34.7748, // 豊中北付近
+			135.4524, 34.7902, // 空港付近
+			135.4403, 34.8079, // 池田木部付近
+			135.4238, 34.8212 // 池田付近
+		];
+
+		// 梅田から天王寺方面へ向かう阪神高速1号環状線〜14号松原線の概略点列
+		const routeTennojiLonLat = [
+			135.4983, 34.7056, // 梅田
+			135.4974, 34.7009, // 堂島付近
+			135.4969, 34.6962, // 中之島南付近
+			135.4985, 34.6912, // 阿波座付近
+			135.5022, 34.6867, // 本町西付近
+			135.5068, 34.6826, // 心斎橋北付近
+			135.5108, 34.6784, // 道頓堀付近
+			135.5142, 34.6726, // なんば付近
+			135.5172, 34.6660, // 日本橋付近
+			135.5196, 34.6588, // 恵美須町付近
+			135.5215, 34.6514, // 新今宮北付近
+			135.5227, 34.6446, // 新今宮南付近
+			135.5231, 34.6383, // 天王寺公園西付近
+			135.5223, 34.6317 // 天王寺付近
+		];
+
+		function buildRouteCoordinates(lonLatArray) {
+			const coordinates = [];
+			for (let i = 0; i < lonLatArray.length; i += 2) {
+				coordinates.push([lonLatArray[i], lonLatArray[i + 1], 0]);
+			}
+			return coordinates;
+		}
+
+		const routeIkedaCoordinates = buildRouteCoordinates(routeIkedaLonLat);
+		const routeTennojiCoordinates = buildRouteCoordinates(routeTennojiLonLat);
+
+		viewer.entities.add({
+			name: "阪神高速11号池田線（概略・外側強調）",
+			polyline: {
+				positions: Cesium.Cartesian3.fromDegreesArray(routeIkedaLonLat),
+				width: 14,
+				material: Cesium.Color.WHITE.withAlpha(0.95),
+				clampToGround: true
+			}
+		});
+
+		viewer.entities.add({
+			name: "阪神高速11号池田線（概略・内側強調）",
+			polyline: {
+				positions: Cesium.Cartesian3.fromDegreesArray(routeIkedaLonLat),
+				width: 8,
+				material: new Cesium.PolylineGlowMaterialProperty({
+					glowPower: 0.28,
+					color: Cesium.Color.ORANGE
+				}),
+				clampToGround: true
+			}
+		});
+
+		viewer.entities.add({
+			name: "阪神高速（梅田-天王寺）（概略・外側強調）",
+			polyline: {
+				positions: Cesium.Cartesian3.fromDegreesArray(routeTennojiLonLat),
+				width: 14,
+				material: Cesium.Color.WHITE.withAlpha(0.95),
+				clampToGround: true
+			}
+		});
+
+		viewer.entities.add({
+			name: "阪神高速（梅田-天王寺）（概略・内側強調）",
+			polyline: {
+				positions: Cesium.Cartesian3.fromDegreesArray(routeTennojiLonLat),
+				width: 8,
+				material: new Cesium.PolylineGlowMaterialProperty({
+					glowPower: 0.28,
+					color: Cesium.Color.DODGERBLUE
+				}),
+				clampToGround: true
+			}
+		});
+
+		const points = [
+			{ name: "梅田", lon: 135.4983, lat: 34.7056 },
+			{ name: "十三", lon: 135.4848, lat: 34.7268 },
+			{ name: "豊中北", lon: 135.4591, lat: 34.7748 },
+			{ name: "池田", lon: 135.4238, lat: 34.8212 },
+			{ name: "なんば", lon: 135.5112, lat: 34.6682 },
+			{ name: "天王寺", lon: 135.5223, lat: 34.6317 }
+		];
+
+		for (const p of points) {
+			viewer.entities.add({
+				position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
+				point: {
+					pixelSize: 10,
+					color: Cesium.Color.CYAN,
+					outlineColor: Cesium.Color.BLACK,
+					outlineWidth: 2,
+					heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+				},
+				label: {
+					text: p.name,
+					font: "16px sans-serif",
+					style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+					outlineWidth: 2,
+					verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+					pixelOffset: new Cesium.Cartesian2(0, -14),
+					heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+				}
+			});
+		}
+
+		viewer.camera.setView({
+			destination: Cesium.Cartesian3.fromDegrees(135.47, 34.72, 52000),
+			orientation: {
+				heading: Cesium.Math.toRadians(5),
+				pitch: Cesium.Math.toRadians(-55),
+				roll: 0.0
+			}
+		});
+
+		function downloadTextFile(fileName, content, mimeType) {
+			const blob = new Blob([content], { type: mimeType });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = fileName;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			URL.revokeObjectURL(url);
+		}
+
+		function buildRouteGeoJson() {
+			return {
+				type: "FeatureCollection",
+				name: "hanshin-umeda-routes",
+				features: [
+					{
+						type: "Feature",
+						properties: {
+							name: "阪神高速11号池田線（梅田-池田）",
+							styleColor: "#ff9f1c"
+						},
+						geometry: {
+							type: "LineString",
+							coordinates: routeIkedaCoordinates
+						}
+					},
+					{
+						type: "Feature",
+						properties: {
+							name: "阪神高速（梅田-天王寺）",
+							styleColor: "#1e90ff"
+						},
+						geometry: {
+							type: "LineString",
+							coordinates: routeTennojiCoordinates
+						}
+					},
+					...points.map((p) => ({
+						type: "Feature",
+						properties: { name: p.name },
+						geometry: {
+							type: "Point",
+							coordinates: [p.lon, p.lat, 0]
+						}
+					}))
+				]
+			};
+		}
+
+		function buildRouteCzml() {
+			const flatIkedaCartographicDegrees = [];
+			for (const c of routeIkedaCoordinates) {
+				flatIkedaCartographicDegrees.push(c[0], c[1], c[2]);
+			}
+
+			const flatTennojiCartographicDegrees = [];
+			for (const c of routeTennojiCoordinates) {
+				flatTennojiCartographicDegrees.push(c[0], c[1], c[2]);
+			}
+
+			return [
+				{
+					id: "document",
+					name: "Hanshin Umeda Ikeda Route",
+					version: "1.0"
+				},
+				{
+					id: "route-11-ikeda",
+					name: "阪神高速11号池田線（梅田-池田）",
+					polyline: {
+						positions: {
+							cartographicDegrees: flatIkedaCartographicDegrees
+						},
+						width: 8,
+						material: {
+							solidColor: {
+								color: {
+									rgba: [255, 159, 28, 255]
+								}
+							}
+						}
+					}
+				},
+				{
+					id: "route-umeda-tennoji",
+					name: "阪神高速（梅田-天王寺）",
+					polyline: {
+						positions: {
+							cartographicDegrees: flatTennojiCartographicDegrees
+						},
+						width: 8,
+						material: {
+							solidColor: {
+								color: {
+									rgba: [30, 144, 255, 255]
+								}
+							}
+						}
+					}
+				},
+				...points.map((p, idx) => ({
+					id: `point-${idx + 1}`,
+					name: p.name,
+					position: {
+						cartographicDegrees: [p.lon, p.lat, 0]
+					},
+					point: {
+						pixelSize: 9,
+						color: {
+							rgba: [123, 223, 242, 255]
+						}
+					},
+					label: {
+						text: p.name,
+						fillColor: {
+							rgba: [255, 255, 255, 255]
+						},
+						outlineColor: {
+							rgba: [0, 0, 0, 255]
+						},
+						outlineWidth: 2,
+						style: "FILL_AND_OUTLINE"
+					}
+				}))
+			];
+		}
+
+		document.getElementById("exportGeoJsonBtn").addEventListener("click", () => {
+			const geoJson = buildRouteGeoJson();
+			downloadTextFile(
+				"hanshin-umeda-routes.geojson",
+				JSON.stringify(geoJson, null, 2),
+				"application/geo+json"
+			);
+		});
+
+		document.getElementById("exportCzmlBtn").addEventListener("click", () => {
+			const czml = buildRouteCzml();
+			downloadTextFile(
+				"hanshin-umeda-routes.czml",
+				JSON.stringify(czml, null, 2),
+				"application/json"
+			);
+		});
+	</script>
+</body>
+</html>
